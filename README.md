@@ -13,13 +13,14 @@ A drop-in Godot 4 client node for OpenAI-compatible HTTP APIs. Works with [OpenA
 - Text-to-speech (returns a ready-to-play `AudioStream`)
 - Speech-to-text / transcription (`AudioStreamMP3` and `AudioStreamWAV`)
 - List available models
+- `custom_request()` escape hatch for any endpoint the client doesn't cover
 - Every method returns a typed response object — check `.ok` to detect failure
 
 ## Design philosophy
 
 This library prioritizes being easy to use over 100% API coverage — it is not trying to be "the OpenAI SDK for Godot" the way the [`openai` library](https://developers.openai.com/api/reference/python) is for Python. For example, the chat completion reply is available as `res.content` rather than `res.choices[0].message.content`.
 
-When you need more than the defaults, every method accepts an `extra_body` dictionary that is merged into the request as-is, and every response carries a `raw_body` with the full server response. So if you do need `choices[0].message.content`, it's right there on `res.raw_body`.
+When you need more than the defaults, every method accepts an `extra_body` dictionary that is merged into the request as-is, and every response carries a `raw_body` with the full server response. So if you do need `choices[0].message.content`, it's right there on `res.raw_body`. And for endpoints the client doesn't cover at all, `custom_request()` sends a request to any path on the server — same auth, same `.ok` pattern — and returns the parsed response on `raw_body`.
 
 ## Compatibility
 

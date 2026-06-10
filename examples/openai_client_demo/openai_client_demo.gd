@@ -1,6 +1,7 @@
 extends Control
 
 const CHAT_MODEL := "gpt-5.4-mini"
+const EMBEDDING_MODEL := "text-embedding-3-small"
 const TTS_MODEL := "gpt-4o-mini-tts"
 const TTS_VOICE := "marin"
 const STT_MODEL := "whisper-1"
@@ -26,6 +27,7 @@ func _ready() -> void:
 	await _image_generation()
 	await _voice_tts(chat_res_str)
 	await _voice_stt()
+	await _custom_request()
 
 
 func _chat_non_streaming() -> String:
@@ -194,6 +196,66 @@ func _voice_stt() -> void:
 		)
 		return
 	_render_text("Transcription: " + response.text)
+
+
+func _custom_request() -> void:
+	# custom_request() as an escape hatch — here we call /v1/embeddings directly,
+	# an endpoint the client doesn't cover, and compute cosine similarities.
+	_render_text("Custom request (embeddings / cosine similarity):")
+	var sentences := [
+		"I lost my dog.",
+		"My puppy is missing.",
+		"Minneapolis is a nice city.",
+	]
+	var response := await client.custom_request(
+		"/embeddings",
+		"POST",
+		{"model": EMBEDDING_MODEL, "input": sentences}
+	)
+	if not response.ok:
+		push_error("Error fetching embeddings: " + str(response.error))
+		return
+
+	var data: Variant = response.raw_body.get("data")
+	if not data is Array or (data as Array).size() != sentences.size():
+		push_error("Unexpected embeddings response shape.")
+		return
+
+	# Extract the embedding vectors in index order.
+	var vectors: Array[PackedFloat64Array] = []
+	for entry in (data as Array):
+		if not entry is Dictionary:
+			push_error("Malformed embedding entry.")
+			return
+		var values: Variant = (entry as Dictionary).get("embedding")
+		if not values is Array:
+			push_error("Embedding entry missing vector.")
+			return
+		var vec := PackedFloat64Array(values)
+		vectors.append(vec)
+
+	# Print pairwise cosine similarities.
+	for i in range(sentences.size()):
+		for j in range(i + 1, sentences.size()):
+			var similarity := _cosine_similarity(vectors[i], vectors[j])
+			_render_text(
+				'"%s" vs "%s": %.4f' % [sentences[i], sentences[j], similarity]
+			)
+	_render_text("---")
+
+
+# Returns the cosine similarity (dot product of unit vectors) for two vectors.
+func _cosine_similarity(a: PackedFloat64Array, b: PackedFloat64Array) -> float:
+	var dot := 0.0
+	var mag_a := 0.0
+	var mag_b := 0.0
+	for i in a.size():
+		dot += a[i] * b[i]
+		mag_a += a[i] * a[i]
+		mag_b += b[i] * b[i]
+	if mag_a == 0.0 or mag_b == 0.0:
+		return 0.0
+	return dot / (sqrt(mag_a) * sqrt(mag_b))
 
 
 func _render_text(txt: String, end: String = "\n") -> void:

@@ -38,12 +38,13 @@ The addon lives entirely in [c3_openai_client/](c3_openai_client/).
 - `download_image(url)` → `Image` (async helper; downloads a `url` entry and decodes it)
 - `create_speech(input, opts)` → `SpeechResponse`
 - `create_transcription(audio, opts)` → `TranscriptionResponse`
+- `custom_request(path, method, body, query)` → `CustomRequestResponse` (escape hatch for endpoints the client doesn't cover; parsed JSON object on `raw_body`, empty 2xx body succeeds, non-object JSON is a parse failure)
 
 **`C3SSERequest`** ([c3_openai_client/utils/c3_sse_request.gd](c3_openai_client/utils/c3_sse_request.gd)) — Custom SSE implementation built on `StreamPeerTCP` + `StreamPeerTLS`. Godot's `HTTPRequest` doesn't support streaming, so this class handles raw TCP/TLS connection, HTTP request formatting, chunked transfer decoding, and SSE event parsing. Emits signals: `event_received`, `finished`, `response_error`, `request_failed`.
 
 **Response/options types** are inner classes defined in `c3_openai_client.gd`:
 - `ChatOptions`, `ImageOptions`, `SpeechOptions`, `TranscriptionOptions` — input option bags
-- `ChatCompletionResponse`, `ImageGenerationResponse`, `SpeechResponse`, `TranscriptionResponse`, `ModelsResponse` — all carry `ok: bool` and optional `error: ApiError`
+- `ChatCompletionResponse`, `ImageGenerationResponse`, `SpeechResponse`, `TranscriptionResponse`, `ModelsResponse`, `CustomRequestResponse` — all carry `ok: bool` and optional `error: ApiError`
 - `ApiError` — typed errors with `kind` string: `"transport"`, `"http"`, `"api"`, `"parse"`, `"client"`, `"cancelled"`
 
 **Tests** are in [tests/](tests/) using the GUT framework (in [addons/gut/](addons/gut/)). Test doubles live in [tests/c3_test_doubles.gd](tests/c3_test_doubles.gd) — `TestableClient` exposes internals for unit testing and `FakeSSERequest` stubs streaming.

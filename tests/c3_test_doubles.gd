@@ -31,10 +31,12 @@ class FakeSSERequest extends C3SSERequest:
 ## Set [member preset_response] before calling any method that triggers a request.
 ## Inspect [member request_log] after the call to assert which endpoints were called
 ## and with what bodies. Each entry is:[br] [code]{"method": String, "url": String, "body": Variant, "headers": PackedStringArray}[/code]
-## [br]where [code]body[/code] is [code]null[/code] for GET requests and a [Dictionary] for POST requests.
+## [br]where [code]body[/code] is [code]null[/code] for GET requests, a [Dictionary]
+## for POST requests, and the raw JSON [String] (possibly empty) for
+## [method C3OpenAIClient.custom_request] calls.
 @warning_ignore("missing_tool")
 class TestableClient extends C3OpenAIClient:
-	## The response returned by [method _http_get] and [method _http_post]. Defaults to an empty success.
+	## The response returned by the fake HTTP layer. Defaults to an empty success.
 	var preset_response := {"ok": true, "body": PackedByteArray()}
 	## Ordered log of all requests made.
 	## Each entry is:[br]
@@ -63,6 +65,19 @@ class TestableClient extends C3OpenAIClient:
 		request_log.append(
 			{"method": "POST", "url": url, "body": body, "headers": headers}
 		)
+		return preset_response
+
+	# Catches custom_request(), which calls _http_request() directly rather than
+	# going through the _http_get()/_http_post() wrappers stubbed above.
+	func _http_request(
+		method: int, url: String, headers: PackedStringArray, body: String = ""
+	) -> Dictionary:
+		request_log.append({
+			"method": _HTTP_METHODS.find_key(method),
+			"url": url,
+			"body": body,
+			"headers": headers,
+		})
 		return preset_response
 
 	func _http_post_multipart(

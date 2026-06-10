@@ -9,6 +9,18 @@ extends Node
 ## broadcast for optional cross-cutting concerns such as global error logging.
 signal request_failed(error: ApiError)
 
+# HTTP method names accepted by custom_request(), mapped to the HTTPClient
+# constants taken by _http_request().
+const _HTTP_METHODS: Dictionary = {
+	"GET": HTTPClient.METHOD_GET,
+	"HEAD": HTTPClient.METHOD_HEAD,
+	"POST": HTTPClient.METHOD_POST,
+	"PUT": HTTPClient.METHOD_PUT,
+	"DELETE": HTTPClient.METHOD_DELETE,
+	"OPTIONS": HTTPClient.METHOD_OPTIONS,
+	"PATCH": HTTPClient.METHOD_PATCH,
+}
+
 ## The base URL of the OpenAI-compatible API, including the version path.
 ## For example, [code]"https://api.openai.com/v1"[/code] for OpenAI or
 ## [code]"http://127.0.0.1:1234/v1"[/code] for a local server.
@@ -446,6 +458,73 @@ func download_image(url: String) -> Image:
 	return _image_from_bytes(response["body"])
 
 
+## Escape hatch for endpoints and behaviors this client does not cover. Sends a
+## request to [param path] — appended to [member base_url], with a leading
+## [code]"/"[/code] added when missing — using the client's usual auth and JSON
+## headers, and returns the response body parsed but uninterpreted on
+## [member CustomRequestResponse.raw_body]. [br]
+## [param method] is an HTTP method name (case-insensitive): [code]"GET"[/code],
+## [code]"HEAD"[/code], [code]"POST"[/code], [code]"PUT"[/code],
+## [code]"DELETE"[/code], [code]"OPTIONS"[/code], or [code]"PATCH"[/code]. [br]
+## [param body] is sent as the JSON request body; leave empty to send no body
+## (as a GET usually would). [br]
+## [param query] entries are URL-encoded and appended to the URL as a query
+## string; leave empty for none. [br]
+## Returns a [CustomRequestResponse] with [member CustomRequestResponse.ok] set
+## to [code]false[/code] and emits [signal request_failed] on failure —
+## including when a non-empty 2xx body is not a JSON object. An empty 2xx body
+## (e.g. [code]204 No Content[/code]) succeeds with
+## [member CustomRequestResponse.raw_body] set to [code]{}[/code].
+func custom_request(
+	path: String, method: String, body: Dictionary = {}, query: Dictionary = {}
+) -> CustomRequestResponse:
+	var res := CustomRequestResponse.new()
+	var method_int: int = _HTTP_METHODS.get(method.to_upper(), -1)
+	if method_int == -1:
+		push_error('C3OpenAIClient: Unsupported HTTP method "%s".' % method)
+		res.ok = false
+		res.error = ApiError.client_error(
+			'Unsupported HTTP method "%s".' % method
+		)
+		return res
+	if not path.begins_with("/"):
+		path = "/" + path
+	var url := base_url + path
+	if not query.is_empty():
+		url += "?" + HTTPClient.new().query_string_from_dict(query)
+	var request_body := "" if body.is_empty() else JSON.stringify(body)
+	var response := await _http_request(
+		method_int, url, _headers(), request_body
+	)
+	if not response["ok"]:
+		res.ok = false
+		res.error = response["error"]
+		request_failed.emit(res.error)
+		return res
+	var body_str := (response["body"] as PackedByteArray).get_string_from_utf8()
+	# A bodyless 2xx (e.g. 204 from a DELETE) is a success with nothing to parse.
+	if body_str.strip_edges().is_empty():
+		return res
+	var parser := JSON.new()
+	if parser.parse(body_str) != OK:
+		res.ok = false
+		res.error = ApiError.parse_failure(
+			"Failed to parse custom request response as JSON.", body_str
+		)
+		request_failed.emit(res.error)
+		return res
+	var json: Variant = parser.get_data()
+	if not json is Dictionary:
+		res.ok = false
+		res.error = ApiError.parse_failure(
+			"Custom request response JSON is not an object.", body_str
+		)
+		request_failed.emit(res.error)
+		return res
+	res.raw_body = json
+	return res
+
+
 # Creates the C3SSERequest used by chat_completion_stream().
 # Overridable in tests to substitute a fake transport.
 func _make_sse_request() -> C3SSERequest:
@@ -858,8 +937,8 @@ class ChatCompletionResponse:
 	var usage := {}
 	## The full parsed response body as a [Dictionary], for fields this class does
 	## not surface. Populated whenever the server returned a valid JSON object;
-	## empty for streamed results (which have no single response body) and on
-	## transport, HTTP, or non-JSON errors.
+	## [code]{}[/code] for streamed results (which have no single response body)
+	## and on transport, HTTP, or non-JSON errors.
 	var raw_body := {}
 
 
@@ -1039,8 +1118,8 @@ class TranscriptionResponse:
 	## The full parsed response body as a [Dictionary], for fields this class does
 	## not surface — for example [code]"segments"[/code]/[code]"words"[/code] when
 	## [code]response_format[/code] is [code]"verbose_json"[/code]. Populated whenever
-	## the server returned a valid JSON object; empty on transport, HTTP, or
-	## non-JSON errors.
+	## the server returned a valid JSON object; [code]{}[/code] on transport,
+	## HTTP, or non-JSON errors.
 	var raw_body := {}
 
 
@@ -1053,8 +1132,8 @@ class ModelsResponse:
 	var ids := PackedStringArray()
 	## The full parsed response body as a [Dictionary], for fields this class does
 	## not surface (for example each model's [code]"created"[/code]/[code]"owned_by"[/code]).
-	## Populated whenever the server returned a valid JSON object; empty on
-	## transport, HTTP, or non-JSON errors.
+	## Populated whenever the server returned a valid JSON object; [code]{}[/code]
+	## on transport, HTTP, or non-JSON errors.
 	var raw_body := {}
 
 
@@ -1116,6 +1195,19 @@ class ImageGenerationResponse:
 	## The full parsed response body as a [Dictionary], for fields this class does
 	## not surface (for example top-level [code]"created"[/code] or [code]"usage"[/code]).
 	## [member data] is the first entry of its [code]"data"[/code] array. Populated
-	## whenever the server returned a valid JSON object; empty on transport, HTTP,
-	## or non-JSON errors.
+	## whenever the server returned a valid JSON object; [code]{}[/code] on
+	## transport, HTTP, or non-JSON errors.
+	var raw_body := {}
+
+
+## The response returned by [method custom_request].
+class CustomRequestResponse:
+	## [code]true[/code] if the request succeeded.
+	var ok := true
+	## Populated with error details when [member ok] is [code]false[/code].
+	var error: ApiError = null
+	## The full parsed response body as a [Dictionary] — [method custom_request]
+	## does not interpret it beyond parsing. Populated whenever the server
+	## returned a JSON object; [code]{}[/code] when the 2xx body was empty (e.g.
+	## [code]204 No Content[/code]) and on transport, HTTP, or non-JSON errors.
 	var raw_body := {}
