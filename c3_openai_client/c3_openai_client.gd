@@ -21,6 +21,10 @@ const _HTTP_METHODS: Dictionary = {
 	"PATCH": HTTPClient.METHOD_PATCH,
 }
 
+# The SSE helper is referenced by relative path rather than a global class_name so
+# that bundling this addon can't collide with another copy (e.g. from C3 Utils).
+const C3SSERequest := preload("utils/c3_sse_request.gd")
+
 ## The base URL of the OpenAI-compatible API, including the version path.
 ## For example, [code]"https://api.openai.com/v1"[/code] for OpenAI or
 ## [code]"http://127.0.0.1:1234/v1"[/code] for a local server.

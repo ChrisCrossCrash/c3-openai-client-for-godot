@@ -2,7 +2,6 @@
 # v4.2.2
 # File revision: 2026-06-05
 
-class_name C3SSERequest
 extends Node
 
 ## An HTTPRequest-style node for consuming Server-Sent Event (SSE) streams.
