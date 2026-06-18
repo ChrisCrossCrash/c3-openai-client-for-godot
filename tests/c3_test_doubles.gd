@@ -1,30 +1,51 @@
 class_name C3TestDoubles
 ## Shared test doubles for [C3OpenAIClient] tests.
 
+const C3HTTPRequest := preload("res://c3_openai_client/utils/c3_http_request.gd")
 
-## Fake SSE transport that records the request and never touches the network.
-## Tests drive the stream by emitting the inherited [C3SSERequest] signals
-## (stream_started, event_received, finished, request_failed) by hand.
-class FakeSSERequest extends C3SSERequest:
-	var requested := false
-	var request_return: Error = OK
-	var last_url := ""
-	var last_headers: PackedStringArray = []
-	var last_method: HTTPClient.Method = HTTPClient.METHOD_GET
-	var last_body := ""
 
-	func request(
-		url: String,
-		custom_headers: PackedStringArray = [],
-		method: HTTPClient.Method = HTTPClient.METHOD_GET,
-		request_body: String = "",
-	) -> Error:
-		requested = true
-		last_url = url
-		last_headers = custom_headers
-		last_method = method
-		last_body = request_body
-		return request_return
+## Builds a successful 2xx [C3HTTPRequest.Response] carrying [param body].
+static func ok_response(
+	body: PackedByteArray = PackedByteArray(), status := 200
+) -> C3HTTPRequest.Response:
+	var resp := C3HTTPRequest.Response.new()
+	resp.status = status
+	resp.body = body
+	return resp
+
+
+## Builds a failed non-2xx (HTTP) [C3HTTPRequest.Response]. The upper layer routes
+## this through [method C3OpenAIClient.ApiError.from_response], so a JSON error
+## [param body] is parsed into a structured API error.
+static func http_error_response(
+	status: int, body := ""
+) -> C3HTTPRequest.Response:
+	var resp := C3HTTPRequest.Response.new()
+	resp.ok = false
+	resp.status = status
+	resp.body = body.to_utf8_buffer()
+	var e := C3HTTPRequest.RequestError.new()
+	e.kind = C3HTTPRequest.RequestError.Kind.HTTP
+	e.status = status
+	e.message = "Request failed with status %d." % status
+	resp.error = e
+	return resp
+
+
+## Builds a failed [C3HTTPRequest.Response] with a transport-level error.
+static func transport_error_response(message := "") -> C3HTTPRequest.Response:
+	var resp := C3HTTPRequest.Response.new()
+	resp.ok = false
+	resp.error = C3HTTPRequest.RequestError.transport(message)
+	return resp
+
+
+## Builds a failed [C3HTTPRequest.Response] with a client (bad-argument) error.
+static func client_error_response(message := "") -> C3HTTPRequest.Response:
+	var resp := C3HTTPRequest.Response.new()
+	resp.ok = false
+	resp.error = C3HTTPRequest.RequestError.client_error(message)
+	return resp
 
 
 ## Test double for [C3OpenAIClient] that bypasses real HTTP requests.
@@ -36,24 +57,51 @@ class FakeSSERequest extends C3SSERequest:
 ## [method C3OpenAIClient.custom_request] calls.
 @warning_ignore("missing_tool")
 class TestableClient extends C3OpenAIClient:
+	## Drives the fake streaming seam: emit to resume a parked [method _http_stream]
+	## and resolve the [ChatStream] with [member stream_result].
+	signal _stream_drive
+
 	## The response returned by the fake HTTP layer. Defaults to an empty success.
-	var preset_response := {"ok": true, "body": PackedByteArray()}
+	var preset_response: C3HTTPRequest.Response = C3TestDoubles.ok_response()
 	## Ordered log of all requests made.
 	## Each entry is:[br]
 	## [code]{"method": String, "url": String, "body": Variant, "headers": PackedStringArray}[/code].
 	var request_log: Array[Dictionary] = []
-	## The most recent fake SSE transport handed to a [ChatStream]. Drive its
-	## signals to simulate a stream. Set before the call via [member sse_request_return].
-	var last_sse: FakeSSERequest
-	## The [Error] the next fake SSE [method FakeSSERequest.request] should return.
-	var sse_request_return: Error = OK
 
-	func _make_sse_request() -> C3SSERequest:
-		last_sse = FakeSSERequest.new()
-		last_sse.request_return = sse_request_return
-		return last_sse
+	## Streaming: the URL/headers/body the last stream was started with.
+	var last_stream_url := ""
+	var last_stream_headers: PackedStringArray = []
+	var last_stream_body := ""
+	## The event sink handed to the last stream. Call it to push SSE events:
+	## [code]stream_on_event.call(data, "message")[/code].
+	var stream_on_event: Callable
+	## The cancellation token handed to the last stream.
+	var stream_token: C3HTTPRequest.CancellationToken
+	## The [C3HTTPRequest.Response] the parked stream returns once driven. Set it,
+	## then emit [signal _stream_drive] to finish the stream.
+	var stream_result: C3HTTPRequest.Response = C3TestDoubles.ok_response()
 
-	func _http_get(url: String, headers: PackedStringArray) -> Dictionary:
+	func _http_stream(
+		url: String,
+		headers: PackedStringArray,
+		body: String,
+		on_event: Callable,
+		token: C3HTTPRequest.CancellationToken
+	) -> C3HTTPRequest.Response:
+		last_stream_url = url
+		last_stream_headers = headers
+		last_stream_body = body
+		stream_on_event = on_event
+		stream_token = token
+		# Park until the test drives the stream, returning control so it can connect
+		# signals and push events. Emitting the signal an await is parked on resumes
+		# this synchronously, so `finished` fires during the driving emit.
+		await _stream_drive
+		return stream_result
+
+	func _http_get(
+		url: String, headers: PackedStringArray
+	) -> C3HTTPRequest.Response:
 		request_log.append(
 			{"method": "GET", "url": url, "body": null, "headers": headers}
 		)
@@ -61,7 +109,7 @@ class TestableClient extends C3OpenAIClient:
 
 	func _http_post(
 		url: String, body: Dictionary, headers: PackedStringArray
-	) -> Dictionary:
+	) -> C3HTTPRequest.Response:
 		request_log.append(
 			{"method": "POST", "url": url, "body": body, "headers": headers}
 		)
@@ -70,8 +118,11 @@ class TestableClient extends C3OpenAIClient:
 	# Catches custom_request(), which calls _http_request() directly rather than
 	# going through the _http_get()/_http_post() wrappers stubbed above.
 	func _http_request(
-		method: int, url: String, headers: PackedStringArray, body: String = ""
-	) -> Dictionary:
+		method: C3HTTPRequest.Method,
+		url: String,
+		headers: PackedStringArray,
+		body: String = ""
+	) -> C3HTTPRequest.Response:
 		request_log.append({
 			"method": _HTTP_METHODS.find_key(method),
 			"url": url,
@@ -88,7 +139,7 @@ class TestableClient extends C3OpenAIClient:
 		filename: String,
 		file_content_type: String,
 		headers: PackedStringArray
-	) -> Dictionary:
+	) -> C3HTTPRequest.Response:
 		request_log.append({
 			"method": "POST_MULTIPART",
 			"url": url,

@@ -16,7 +16,7 @@ godot --headless --path . -s addons/gut/gut_cmdln.gd -gdir=res://tests -ginclude
 
 To run a single test file, add `-gtest=res://tests/test_chat_completion.gd` (swap in the desired file).
 
-All tests must pass before a pull request is approved. No real HTTP calls are made — the test suite uses `TestableClient` and `FakeSSERequest` from `tests/c3_test_doubles.gd` to drive all network behavior in-process.
+All tests must pass before a pull request is approved. No real HTTP calls are made — the test suite uses `TestableClient` from `tests/c3_test_doubles.gd`, which overrides the client's `_http_*` seams (including the streaming `_http_stream`) to drive all network behavior in-process.
 
 ## Code Style
 

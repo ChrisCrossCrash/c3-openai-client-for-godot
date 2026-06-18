@@ -9,21 +9,21 @@ extends Node
 ## broadcast for optional cross-cutting concerns such as global error logging.
 signal request_failed(error: ApiError)
 
-# HTTP method names accepted by custom_request(), mapped to the HTTPClient
-# constants taken by _http_request().
-const _HTTP_METHODS: Dictionary = {
-	"GET": HTTPClient.METHOD_GET,
-	"HEAD": HTTPClient.METHOD_HEAD,
-	"POST": HTTPClient.METHOD_POST,
-	"PUT": HTTPClient.METHOD_PUT,
-	"DELETE": HTTPClient.METHOD_DELETE,
-	"OPTIONS": HTTPClient.METHOD_OPTIONS,
-	"PATCH": HTTPClient.METHOD_PATCH,
-}
+# The HTTP client is referenced by relative path rather than a global class_name
+# so that bundling this addon can't collide with another copy (e.g. from C3 Utils).
+const C3HTTPRequest := preload("utils/c3_http_request.gd")
 
-# The SSE helper is referenced by relative path rather than a global class_name so
-# that bundling this addon can't collide with another copy (e.g. from C3 Utils).
-const C3SSERequest := preload("utils/c3_sse_request.gd")
+# HTTP method names accepted by custom_request(), mapped to the C3HTTPRequest.Method
+# values taken by _http_request().
+const _HTTP_METHODS: Dictionary = {
+	"GET": C3HTTPRequest.Method.GET,
+	"HEAD": C3HTTPRequest.Method.HEAD,
+	"POST": C3HTTPRequest.Method.POST,
+	"PUT": C3HTTPRequest.Method.PUT,
+	"DELETE": C3HTTPRequest.Method.DELETE,
+	"OPTIONS": C3HTTPRequest.Method.OPTIONS,
+	"PATCH": C3HTTPRequest.Method.PATCH,
+}
 
 ## The base URL of the OpenAI-compatible API, including the version path.
 ## For example, [code]"https://api.openai.com/v1"[/code] for OpenAI or
@@ -38,14 +38,14 @@ var api_key := "no-key"
 ## Returns a [ModelsResponse] with [member ModelsResponse.ok] set to
 ## [code]false[/code] and emits [signal request_failed] on failure.
 func get_models() -> ModelsResponse:
-	var response := await _http_get(base_url + "/models", _headers())
+	var resp := await _http_get(base_url + "/models", _headers())
 	var res := ModelsResponse.new()
-	if not response["ok"]:
+	if not resp.ok:
 		res.ok = false
-		res.error = response["error"]
+		res.error = _to_api_error(resp)
 		request_failed.emit(res.error)
 		return res
-	var body_str := (response["body"] as PackedByteArray).get_string_from_utf8()
+	var body_str := resp.text
 	var parser := JSON.new()
 	if parser.parse(body_str) != OK:
 		res.ok = false
@@ -82,16 +82,16 @@ func chat_completion(
 		opts = ChatOptions.new()
 	var body := _build_chat_body(messages, opts)
 	body.merge(opts.extra_body, true)
-	var response := await _http_post(
+	var resp := await _http_post(
 		base_url + "/chat/completions", body, _headers()
 	)
 	var res := ChatCompletionResponse.new()
-	if not response["ok"]:
+	if not resp.ok:
 		res.ok = false
-		res.error = response["error"]
+		res.error = _to_api_error(resp)
 		request_failed.emit(res.error)
 		return res
-	var body_str := (response["body"] as PackedByteArray).get_string_from_utf8()
+	var body_str := resp.text
 	var parser := JSON.new()
 	if parser.parse(body_str) != OK:
 		res.ok = false
@@ -166,11 +166,7 @@ func chat_completion_stream(
 	var stream := ChatStream.new()
 	add_child(stream)
 	stream._start(
-		_make_sse_request(),
-		base_url + "/chat/completions",
-		_headers(),
-		JSON.stringify(body),
-		self
+		self, base_url + "/chat/completions", _headers(), JSON.stringify(body)
 	)
 	return stream
 
@@ -243,17 +239,17 @@ func create_speech(input: String, opts: SpeechOptions = null) -> SpeechResponse:
 		"response_format": "pcm",
 	}
 	body.merge(opts.extra_body, true)
-	var response := await _http_post(
+	var resp := await _http_post(
 		base_url + "/audio/speech", body, _headers()
 	)
 	var res := SpeechResponse.new()
-	if not response["ok"]:
+	if not resp.ok:
 		res.ok = false
-		res.error = response["error"]
+		res.error = _to_api_error(resp)
 		request_failed.emit(res.error)
 		return res
 	var wav := AudioStreamWAV.new()
-	wav.data = response["body"]
+	wav.data = resp.body
 	wav.stereo = opts.pcm_stereo
 	wav.mix_rate = opts.pcm_sample_rate
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
@@ -309,7 +305,7 @@ func create_transcription(
 	if not opts.language.is_empty():
 		form_fields["language"] = opts.language
 	form_fields.merge(opts.extra_body, true)
-	var response := await _http_post_multipart(
+	var resp := await _http_post_multipart(
 		base_url + "/audio/transcriptions",
 		form_fields,
 		"file",
@@ -318,13 +314,13 @@ func create_transcription(
 		file_content_type,
 		_headers()
 	)
-	if not response["ok"]:
+	if not resp.ok:
 		res.ok = false
-		res.error = response["error"]
+		res.error = _to_api_error(resp)
 		request_failed.emit(res.error)
 		return res
 	var parser := JSON.new()
-	var body_str := (response["body"] as PackedByteArray).get_string_from_utf8()
+	var body_str := resp.text
 	if parser.parse(body_str) != OK:
 		res.ok = false
 		res.error = ApiError.parse_failure(
@@ -376,15 +372,15 @@ func create_image(
 	if not response_format.is_empty():
 		body["response_format"] = response_format
 	body.merge(opts.extra_body, true)
-	var response := await _http_post(
+	var resp := await _http_post(
 		base_url + "/images/generations", body, _headers()
 	)
-	if not response["ok"]:
+	if not resp.ok:
 		res.ok = false
-		res.error = response["error"]
+		res.error = _to_api_error(resp)
 		request_failed.emit(res.error)
 		return res
-	var body_str := (response["body"] as PackedByteArray).get_string_from_utf8()
+	var body_str := resp.text
 	var parser := JSON.new()
 	if parser.parse(body_str) != OK:
 		res.ok = false
@@ -452,14 +448,14 @@ static func image_from_base64(b64: String) -> Image:
 ## Unlike [method image_from_base64], this performs a network request, so it is
 ## an instance method that must be [code]await[/code]ed rather than a static one.
 func download_image(url: String) -> Image:
-	var response := await _http_get(url, PackedStringArray())
-	if not response["ok"]:
+	var resp := await _http_get(url, PackedStringArray())
+	if not resp.ok:
 		push_error(
 			"C3OpenAIClient: download_image() request failed: "
-			+ str(response["error"])
+			+ str(_to_api_error(resp))
 		)
 		return null
-	return _image_from_bytes(response["body"])
+	return _image_from_bytes(resp.body)
 
 
 ## Escape hatch for endpoints and behaviors this client does not cover. Sends a
@@ -483,8 +479,8 @@ func custom_request(
 	path: String, method: String, body: Dictionary = {}, query: Dictionary = {}
 ) -> CustomRequestResponse:
 	var res := CustomRequestResponse.new()
-	var method_int: int = _HTTP_METHODS.get(method.to_upper(), -1)
-	if method_int == -1:
+	var method_id: C3HTTPRequest.Method = _HTTP_METHODS.get(method.to_upper(), -1)
+	if method_id == -1:
 		push_error('C3OpenAIClient: Unsupported HTTP method "%s".' % method)
 		res.ok = false
 		res.error = ApiError.client_error(
@@ -497,15 +493,15 @@ func custom_request(
 	if not query.is_empty():
 		url += "?" + HTTPClient.new().query_string_from_dict(query)
 	var request_body := "" if body.is_empty() else JSON.stringify(body)
-	var response := await _http_request(
-		method_int, url, _headers(), request_body
+	var resp := await _http_request(
+		method_id, url, _headers(), request_body
 	)
-	if not response["ok"]:
+	if not resp.ok:
 		res.ok = false
-		res.error = response["error"]
+		res.error = _to_api_error(resp)
 		request_failed.emit(res.error)
 		return res
-	var body_str := (response["body"] as PackedByteArray).get_string_from_utf8()
+	var body_str := resp.text
 	# A bodyless 2xx (e.g. 204 from a DELETE) is a success with nothing to parse.
 	if body_str.strip_edges().is_empty():
 		return res
@@ -529,10 +525,22 @@ func custom_request(
 	return res
 
 
-# Creates the C3SSERequest used by chat_completion_stream().
+# Runs the streaming HTTP request for a ChatStream, dispatching each SSE event to
+# `on_event` and resolving when the stream closes. `token` cancels it early.
 # Overridable in tests to substitute a fake transport.
-func _make_sse_request() -> C3SSERequest:
-	return C3SSERequest.new()
+func _http_stream(
+	url: String,
+	headers: PackedStringArray,
+	body: String,
+	on_event: Callable,
+	token: C3HTTPRequest.CancellationToken
+) -> C3HTTPRequest.Response:
+	var opts := C3HTTPRequest.Options.new()
+	opts.on_sse_event = on_event
+	opts.cancellation_token = token
+	return await C3HTTPRequest.request(
+		url, headers, C3HTTPRequest.Method.POST, body, opts
+	)
 
 
 # Assembles the JSON request body shared by chat_completion() and
@@ -607,9 +615,9 @@ func _audio_stream_wav_to_bytes(wav: AudioStreamWAV) -> PackedByteArray:
 # Internal HTTP POST method. Can be overridden in tests.
 func _http_post(
 	url: String, body: Dictionary, headers: PackedStringArray
-) -> Dictionary:
+) -> C3HTTPRequest.Response:
 	return await _http_request(
-		HTTPClient.METHOD_POST, url, headers, JSON.stringify(body)
+		C3HTTPRequest.Method.POST, url, headers, JSON.stringify(body)
 	)
 
 
@@ -622,7 +630,7 @@ func _http_post_multipart(
 	filename: String,
 	file_content_type: String,
 	headers: PackedStringArray
-) -> Dictionary:
+) -> C3HTTPRequest.Response:
 	var boundary := "GodotFormBoundary" + str(randi())
 	var body := PackedByteArray()
 	for key in form_fields:
@@ -660,68 +668,42 @@ func _http_post_multipart(
 	multipart_headers.append(
 		"Content-Type: multipart/form-data; boundary=" + boundary
 	)
-	return await _http_request_raw(
-		HTTPClient.METHOD_POST, url, multipart_headers, body
+	return await C3HTTPRequest.request_raw(
+		url, multipart_headers, C3HTTPRequest.Method.POST, body
 	)
 
 
 # Internal HTTP GET method. Can be overridden in tests.
-func _http_get(url: String, headers: PackedStringArray) -> Dictionary:
-	return await _http_request(HTTPClient.METHOD_GET, url, headers)
+func _http_get(
+	url: String, headers: PackedStringArray
+) -> C3HTTPRequest.Response:
+	return await _http_request(C3HTTPRequest.Method.GET, url, headers)
 
 
+# Internal request method. Can be overridden in tests.
 func _http_request(
-	method: int, url: String, headers: PackedStringArray, body: String = ""
-) -> Dictionary:
-	var req := HTTPRequest.new()
-	add_child(req)
-	var err := req.request(url, headers, method, body)
-	if err != OK:
-		req.queue_free()
-		return {
-			"ok": false,
-			"error":
-			ApiError.transport("Failed to start request (error %d)." % err)
-		}
-	var args: Array = await req.request_completed
-	req.queue_free()
-	return _process_http_result(args)
+	method: C3HTTPRequest.Method,
+	url: String,
+	headers: PackedStringArray,
+	body: String = ""
+) -> C3HTTPRequest.Response:
+	return await C3HTTPRequest.request(url, headers, method, body)
 
 
-func _http_request_raw(
-	method: int, url: String, headers: PackedStringArray, body: PackedByteArray
-) -> Dictionary:
-	var req := HTTPRequest.new()
-	add_child(req)
-	var err := req.request_raw(url, headers, method, body)
-	if err != OK:
-		req.queue_free()
-		return {
-			"ok": false,
-			"error":
-			ApiError.transport("Failed to start request (error %d)." % err)
-		}
-	var args: Array = await req.request_completed
-	req.queue_free()
-	return _process_http_result(args)
-
-
-# Maps the HTTPRequest.request_completed arguments to the shared response shape:
-# {"ok": true, "body": PackedByteArray} on a 2xx response, or
-# {"ok": false, "error": ApiError} on a transport failure or non-2xx status.
-func _process_http_result(args: Array) -> Dictionary:
-	var result: int = args[0]
-	var status: int = args[1]
-	var resp_body: PackedByteArray = args[3]
-	if result != HTTPRequest.RESULT_SUCCESS:
-		return {
-			"ok": false,
-			"error":
-			ApiError.transport("HTTP transport failed (result %d)." % result)
-		}
-	if status < 200 or status >= 300:
-		return {"ok": false, "error": ApiError.from_response(status, resp_body)}
-	return {"ok": true, "body": resp_body}
+# Converts a failed C3HTTPRequest.Response into the addon's typed ApiError. A
+# non-2xx (HTTP) is routed through ApiError.from_response so the server's own
+# {"error": {...}} body is parsed into kind/code/type/message as before.
+func _to_api_error(resp: C3HTTPRequest.Response) -> ApiError:
+	var err := resp.error
+	match err.kind:
+		C3HTTPRequest.RequestError.Kind.HTTP:
+			return ApiError.from_response(resp.status, resp.body)
+		C3HTTPRequest.RequestError.Kind.CLIENT:
+			return ApiError.client_error(err.message)
+		C3HTTPRequest.RequestError.Kind.CANCELLED:
+			return ApiError.cancelled(err.message)
+		_:
+			return ApiError.transport(err.message)
 
 
 func _headers() -> PackedStringArray:
@@ -958,8 +940,8 @@ class ChatStream extends Node:
 	## [method chat_completion] returns.
 	signal finished(result: ChatCompletionResponse)
 
-	var _sse: C3SSERequest
 	var _client: C3OpenAIClient
+	var _token: C3HTTPRequest.CancellationToken
 	var _res := ChatCompletionResponse.new()
 	var _content := ""
 	var _refusal := ""
@@ -968,42 +950,54 @@ class ChatStream extends Node:
 	## Aborts the in-flight request and resolves [signal finished] with
 	## [member ChatCompletionResponse.ok] set to [code]false[/code].
 	func cancel() -> void:
+		if _done:
+			return
+		# Stop the underlying request; it returns a cancelled Response, and the
+		# _start() continuation then frees this node (see _resolve).
+		if _token != null:
+			_token.cancel()
 		_resolve(false, ApiError.cancelled("Stream cancelled."), false)
 
 	# Kicks off the request. Called by chat_completion_stream() right after the
 	# stream is added to the tree.
 	func _start(
-		sse: C3SSERequest,
+		client: C3OpenAIClient,
 		url: String,
 		headers: PackedStringArray,
-		body: String,
-		client: C3OpenAIClient
+		body: String
 	) -> void:
 		_client = client
-		_sse = sse
-		add_child(_sse)
-		_sse.event_received.connect(_on_event_received)
-		_sse.finished.connect(_on_sse_finished)
-		_sse.response_error.connect(_on_response_error)
-		_sse.request_failed.connect(_on_sse_request_failed)
-		var err := _sse.request(url, headers, HTTPClient.METHOD_POST, body)
-		if err != OK:
-			# Defer so the caller can connect to `finished` before it fires —
-			# _start() runs synchronously inside chat_completion_stream().
-			_resolve.call_deferred(
-				false,
-				ApiError.transport(
-					"Failed to start stream request (error %d)." % err
-				),
-				true
-			)
-
-	func _on_response_error(code: int, body: String) -> void:
-		_resolve(
-			false, ApiError.from_response(code, body.to_utf8_buffer()), true
+		_token = C3HTTPRequest.CancellationToken.new()
+		# Resolves when the stream closes; events arrive via _on_event meanwhile.
+		var resp: C3HTTPRequest.Response = await client._http_stream(
+			url, headers, body, _on_event, _token
 		)
+		# cancel() may have already resolved while the request was in flight.
+		if not _done:
+			if resp.ok:
+				_resolve(true, null, false)
+			else:
+				var err := resp.error
+				match err.kind:
+					C3HTTPRequest.RequestError.Kind.HTTP:
+						# Parse the server's error body, mirroring chat_completion().
+						_resolve(
+							false,
+							ApiError.from_response(resp.status, resp.body),
+							true
+						)
+					C3HTTPRequest.RequestError.Kind.CANCELLED:
+						_resolve(false, ApiError.cancelled(err.message), false)
+					C3HTTPRequest.RequestError.Kind.CLIENT:
+						_resolve(false, ApiError.client_error(err.message), true)
+					_:
+						_resolve(false, ApiError.transport(err.message), true)
+		# Single free point: the request has returned (a cancel() cancels the
+		# token, so this is always reached), so freeing here never pulls the node
+		# out from under the still-running request coroutine.
+		queue_free()
 
-	func _on_event_received(data: String, _event_type: String) -> void:
+	func _on_event(data: String, _event_type: String) -> void:
 		if _done or data == "[DONE]":
 			return
 		var parser := JSON.new()
@@ -1042,15 +1036,11 @@ class ChatStream extends Node:
 		if refusal_piece is String:
 			_refusal += refusal_piece
 
-	func _on_sse_finished() -> void:
-		_resolve(true, null, false)
-
-	func _on_sse_request_failed(reason: String) -> void:
-		_resolve(false, ApiError.transport(reason), true)
-
-	# Single exit point: fills in the result, tears down the SSE node, and emits
-	# finished once. `broadcast` re-emits the client's request_failed signal for
-	# genuine failures (not user cancellation), mirroring chat_completion().
+	# Single exit point: fills in the result and emits finished exactly once.
+	# `broadcast` re-emits the client's request_failed signal for genuine failures
+	# (not user cancellation), mirroring chat_completion(). The node itself is freed
+	# by _start() once the request coroutine returns, never here — so a cancel()
+	# that resolves mid-flight can't free the node out from under that coroutine.
 	func _resolve(ok: bool, error: ApiError, broadcast: bool) -> void:
 		if _done:
 			return
@@ -1060,13 +1050,9 @@ class ChatStream extends Node:
 		if ok:
 			_res.content = _content
 			_res.refusal = _refusal
-		if is_instance_valid(_sse):
-			_sse.queue_free()
-			_sse = null
 		if broadcast and is_instance_valid(_client):
 			_client.request_failed.emit(error)
 		finished.emit(_res)
-		queue_free()
 
 
 ## Optional parameters for a text-to-speech request.

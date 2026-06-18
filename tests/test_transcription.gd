@@ -39,22 +39,22 @@ class TestCreateTranscription extends GutTest:
 		return stream
 
 	func test_returns_transcription_response() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hello world")
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hello world")
+		)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_is(result, C3OpenAIClient.TranscriptionResponse)
 
 	func test_text_is_populated() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hello world")
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hello world")
+		)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_eq(result.text, "Hello world")
 
 	func test_uses_correct_endpoint() -> void:
 		client.base_url = "http://example.com/v1"
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_mp3_stream())
 		assert_eq(
 			client.request_log[0]["url"],
@@ -62,12 +62,12 @@ class TestCreateTranscription extends GutTest:
 		)
 
 	func test_makes_exactly_one_request() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_mp3_stream())
 		assert_eq(client.request_log.size(), 1)
 
 	func test_sends_model_as_form_field() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		var opts := C3OpenAIClient.TranscriptionOptions.new()
 		opts.model = "whisper-large-v3"
 		await client.create_transcription(make_mp3_stream(), opts)
@@ -76,19 +76,19 @@ class TestCreateTranscription extends GutTest:
 		)
 
 	func test_sends_language_when_set() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		var opts := C3OpenAIClient.TranscriptionOptions.new()
 		opts.language = "en"
 		await client.create_transcription(make_mp3_stream(), opts)
 		assert_eq(client.request_log[0]["form_fields"]["language"], "en")
 
 	func test_omits_language_when_empty() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_mp3_stream())
 		assert_false(client.request_log[0]["form_fields"].has("language"))
 
 	func test_extra_body_adds_form_fields() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		var opts := C3OpenAIClient.TranscriptionOptions.new()
 		opts.extra_body = {"prompt": "proper nouns: Godot"}
 		await client.create_transcription(make_mp3_stream(), opts)
@@ -98,7 +98,7 @@ class TestCreateTranscription extends GutTest:
 		)
 
 	func test_extra_body_overrides_library_fields() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		var opts := C3OpenAIClient.TranscriptionOptions.new()
 		opts.model = "whisper-1"
 		opts.extra_body = {"model": "whisper-large-v3"}
@@ -111,36 +111,35 @@ class TestCreateTranscription extends GutTest:
 		var body := JSON.stringify(
 			{"text": "Hi", "language": "english", "duration": 1.5}
 		).to_utf8_buffer()
-		client.preset_response = {"ok": true, "body": body}
+		client.preset_response = C3TestDoubles.ok_response(body)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_eq(result.raw_body.get("language"), "english")
 
 	func test_raw_body_empty_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_eq(result.raw_body, {})
 
 	func test_sends_file_field_named_file() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_mp3_stream())
 		assert_eq(client.request_log[0]["file_field"], "file")
 
 	func test_sends_mp3_bytes_as_file() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		var stream := make_mp3_stream()
 		await client.create_transcription(stream)
 		assert_eq(client.request_log[0]["file_bytes"], stream.data)
 
 	func test_sends_mp3_content_type() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_mp3_stream())
 		assert_eq(client.request_log[0]["file_content_type"], "audio/mpeg")
 
 	func test_sends_wav_bytes_as_file() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		var stream := make_wav_stream()
 		await client.create_transcription(stream)
 		assert_eq(
@@ -149,12 +148,12 @@ class TestCreateTranscription extends GutTest:
 		)
 
 	func test_sends_wav_content_type() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_wav_stream())
 		assert_eq(client.request_log[0]["file_content_type"], "audio/wav")
 
 	func test_sends_wav_filename() -> void:
-		client.preset_response = {"ok": true, "body": make_json_res("Hi")}
+		client.preset_response = C3TestDoubles.ok_response(make_json_res("Hi"))
 		await client.create_transcription(make_wav_stream())
 		assert_eq(client.request_log[0]["filename"], "audio.wav")
 
@@ -216,51 +215,47 @@ class TestCreateTranscription extends GutTest:
 		assert_eq(stream.data, PackedByteArray([0x00, 0x7F]))
 
 	func test_returns_failed_response_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_false(result.ok)
 
 	func test_emits_request_failed_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		watch_signals(client)
 		await client.create_transcription(make_mp3_stream())
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_http_failure() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Connection error.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Connection error."
+		)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_false(result.ok)
 
 	func test_emits_request_failed_on_http_failure() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Connection error.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Connection error."
+		)
 		watch_signals(client)
 		await client.create_transcription(make_mp3_stream())
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_invalid_json() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		var result := await client.create_transcription(make_mp3_stream())
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
 
 	func test_emits_request_failed_on_invalid_json() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		watch_signals(client)
 		await client.create_transcription(make_mp3_stream())
 		assert_signal_emitted(client, "request_failed")

@@ -24,6 +24,8 @@ class TestImageOptions extends GutTest:
 
 ## Tests for [method C3OpenAIClient.create_image].
 class TestCreateImage extends GutTest:
+	const C3HTTPRequest := preload("res://c3_openai_client/utils/c3_http_request.gd")
+
 	var client: C3TestDoubles.TestableClient
 	var png_b64: String
 
@@ -36,12 +38,12 @@ class TestCreateImage extends GutTest:
 
 	## A preset success response carrying a real PNG as a b64_json data entry in
 	## the OpenAI image response shape. Pass a revised prompt to include one.
-	func ok_image(revised_prompt: Variant = null) -> Dictionary:
+	func ok_image(revised_prompt: Variant = null) -> C3HTTPRequest.Response:
 		var entry := {"b64_json": png_b64}
 		if revised_prompt != null:
 			entry["revised_prompt"] = revised_prompt
 		var json := JSON.stringify({"created": 1234567890, "data": [entry]})
-		return {"ok": true, "body": json.to_utf8_buffer()}
+		return C3TestDoubles.ok_response(json.to_utf8_buffer())
 
 	func test_returns_image_generation_response() -> void:
 		client.preset_response = ok_image()
@@ -72,7 +74,7 @@ class TestCreateImage extends GutTest:
 		var json := JSON.stringify(
 			{"data": [{"url": "https://example.com/img.png"}]}
 		)
-		client.preset_response = {"ok": true, "body": json.to_utf8_buffer()}
+		client.preset_response = C3TestDoubles.ok_response(json.to_utf8_buffer())
 		var result := await client.create_image("A red square")
 		assert_true(result.ok)
 		assert_null(result.image)
@@ -167,10 +169,9 @@ class TestCreateImage extends GutTest:
 		assert_eq(result.raw_body.get("created"), 1234567890)
 
 	func test_raw_body_empty_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.create_image("A red square")
 		assert_eq(result.raw_body, {})
 
@@ -215,49 +216,47 @@ class TestCreateImage extends GutTest:
 	# --- failure paths ---
 
 	func test_returns_failed_response_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.create_image("A red square")
 		assert_false(result.ok)
 
 	func test_emits_request_failed_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		watch_signals(client)
 		await client.create_image("A red square")
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_invalid_json() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		var result := await client.create_image("A red square")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
 
 	func test_returns_failed_response_on_missing_data() -> void:
-		client.preset_response = {"ok": true, "body": "{}".to_utf8_buffer()}
+		client.preset_response = C3TestDoubles.ok_response("{}".to_utf8_buffer())
 		var result := await client.create_image("A red square")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
 
 	func test_returns_failed_response_on_empty_data() -> void:
-		client.preset_response = {
-			"ok": true, "body": '{"data": []}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"data": []}'.to_utf8_buffer()
+		)
 		var result := await client.create_image("A red square")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
 
 	func test_returns_failed_response_on_malformed_entry() -> void:
 		# data[0] is not an object — cannot be exposed as the data dictionary.
-		client.preset_response = {
-			"ok": true, "body": '{"data": [42]}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"data": [42]}'.to_utf8_buffer()
+		)
 		var result := await client.create_image("A red square")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
@@ -269,7 +268,7 @@ class TestCreateImage extends GutTest:
 			PackedByteArray([0x00, 0x01, 0x02, 0x03])
 		)
 		var json := JSON.stringify({"data": [{"b64_json": bad}]})
-		client.preset_response = {"ok": true, "body": json.to_utf8_buffer()}
+		client.preset_response = C3TestDoubles.ok_response(json.to_utf8_buffer())
 		var result := await client.create_image("A red square")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
@@ -279,9 +278,9 @@ class TestCreateImage extends GutTest:
 		assert_push_error("could not detect")
 
 	func test_emits_request_failed_on_parse_failure() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		watch_signals(client)
 		await client.create_image("A red square")
 		assert_signal_emitted(client, "request_failed")
@@ -349,7 +348,7 @@ class TestDownloadImage extends GutTest:
 	func test_downloads_and_decodes_png() -> void:
 		var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
 		img.fill(Color.RED)
-		client.preset_response = {"ok": true, "body": img.save_png_to_buffer()}
+		client.preset_response = C3TestDoubles.ok_response(img.save_png_to_buffer())
 		var decoded := await client.download_image("https://example.com/img.png")
 		assert_is(decoded, Image)
 		assert_eq(decoded.get_width(), 16)
@@ -357,7 +356,7 @@ class TestDownloadImage extends GutTest:
 
 	func test_requests_the_given_url() -> void:
 		var img := Image.create_empty(8, 8, false, Image.FORMAT_RGBA8)
-		client.preset_response = {"ok": true, "body": img.save_png_to_buffer()}
+		client.preset_response = C3TestDoubles.ok_response(img.save_png_to_buffer())
 		await client.download_image("https://cdn.example.com/abc.png")
 		assert_eq(client.request_log[0]["method"], "GET")
 		assert_eq(
@@ -365,18 +364,17 @@ class TestDownloadImage extends GutTest:
 		)
 
 	func test_returns_null_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var decoded := await client.download_image("https://example.com/img.png")
 		assert_null(decoded)
 		assert_push_error("download_image")
 
 	func test_returns_null_on_undecodable_data() -> void:
-		client.preset_response = {
-			"ok": true, "body": PackedByteArray([0x00, 0x01, 0x02, 0x03])
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			PackedByteArray([0x00, 0x01, 0x02, 0x03])
+		)
 		var decoded := await client.download_image("https://example.com/img.png")
 		assert_null(decoded)
 		assert_push_error("could not detect")

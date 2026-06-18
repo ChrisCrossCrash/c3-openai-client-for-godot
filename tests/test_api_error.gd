@@ -86,50 +86,43 @@ class TestApiError extends GutTest:
 		assert_eq(str(ApiError.transport("Down.")), "[transport] Down.")
 
 
-## Tests for the shared transport classifier used by every endpoint.
-class TestProcessHttpResult extends GutTest:
+## Tests for _to_api_error(), which maps a failed C3HTTPRequest.Response into the
+## addon's typed ApiError. Used by every endpoint on a failure.
+class TestToApiError extends GutTest:
 	var client: C3OpenAIClient
 
 	func before_each() -> void:
 		client = C3OpenAIClient.new()
 		add_child_autofree(client)
 
-	## Builds an HTTPRequest.request_completed argument array:
-	## [result, response_code, headers, body].
-	func args(result: int, status: int, body: PackedByteArray) -> Array:
-		return [result, status, PackedStringArray(), body]
-
-	func test_2xx_is_ok_with_body() -> void:
-		var body := "hello".to_utf8_buffer()
-		var res := client._process_http_result(
-			args(HTTPRequest.RESULT_SUCCESS, 200, body)
-		)
-		assert_true(res["ok"])
-		assert_eq(res["body"], body)
-
 	func test_transport_failure_is_transport_error() -> void:
-		var res := client._process_http_result(
-			args(HTTPRequest.RESULT_CONNECTION_ERROR, 0, PackedByteArray())
+		var err := client._to_api_error(
+			C3TestDoubles.transport_error_response("Could not connect.")
 		)
-		assert_false(res["ok"])
-		assert_eq(res["error"].kind, &"transport")
+		assert_eq(err.kind, &"transport")
+		assert_eq(err.message, "Could not connect.")
+
+	func test_client_failure_is_client_error() -> void:
+		var err := client._to_api_error(
+			C3TestDoubles.client_error_response("Invalid URL.")
+		)
+		assert_eq(err.kind, &"client")
+		assert_eq(err.message, "Invalid URL.")
 
 	func test_non_2xx_with_error_body_is_api_error() -> void:
 		var body := JSON.stringify(
 			{"error": {"message": "Bad key.", "code": "invalid_api_key"}}
-		).to_utf8_buffer()
-		var res := client._process_http_result(
-			args(HTTPRequest.RESULT_SUCCESS, 401, body)
 		)
-		assert_false(res["ok"])
-		assert_eq(res["error"].kind, &"api")
-		assert_eq(res["error"].status, 401)
-		assert_eq(res["error"].code, "invalid_api_key")
+		var err := client._to_api_error(
+			C3TestDoubles.http_error_response(401, body)
+		)
+		assert_eq(err.kind, &"api")
+		assert_eq(err.status, 401)
+		assert_eq(err.code, "invalid_api_key")
 
 	func test_non_2xx_without_error_body_is_http_error() -> void:
-		var res := client._process_http_result(
-			args(HTTPRequest.RESULT_SUCCESS, 500, "boom".to_utf8_buffer())
+		var err := client._to_api_error(
+			C3TestDoubles.http_error_response(500, "boom")
 		)
-		assert_false(res["ok"])
-		assert_eq(res["error"].kind, &"http")
-		assert_eq(res["error"].status, 500)
+		assert_eq(err.kind, &"http")
+		assert_eq(err.status, 500)

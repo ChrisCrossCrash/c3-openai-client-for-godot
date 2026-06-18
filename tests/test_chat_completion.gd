@@ -46,18 +46,18 @@ class TestChatCompletion extends GutTest:
 		)
 
 	func test_returns_chat_completion_response() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
 		assert_is(result, C3OpenAIClient.ChatCompletionResponse)
 
 	func test_content_is_populated() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hello there!").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hello there!").to_utf8_buffer()
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
@@ -67,9 +67,9 @@ class TestChatCompletion extends GutTest:
 		assert_eq(C3OpenAIClient.ChatOptions.new().extra_body, {})
 
 	func test_extra_body_adds_keys_to_body() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.model = "gpt-4o"
 		opts.extra_body = {"top_p": 0.5}
@@ -79,9 +79,9 @@ class TestChatCompletion extends GutTest:
 		assert_eq(client.request_log[0]["body"]["top_p"], 0.5)
 
 	func test_extra_body_overrides_library_keys() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.model = "gpt-4o"
 		opts.extra_body = {"model": "override-model"}
@@ -91,47 +91,45 @@ class TestChatCompletion extends GutTest:
 		assert_eq(client.request_log[0]["body"]["model"], "override-model")
 
 	func test_raw_body_contains_full_response() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
 		assert_eq(result.raw_body.get("id"), "chatcmpl-abc")
 
 	func test_raw_body_empty_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
 		assert_eq(result.raw_body, {})
 
 	func test_finish_reason_is_populated() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi", "length").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi", "length").to_utf8_buffer()
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
 		assert_eq(result.finish_reason, "length")
 
 	func test_model_is_populated() -> void:
-		client.preset_response = {
-			"ok": true,
-			"body": make_json_res("Hi", "stop", "llama-3.1-8b").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi", "stop", "llama-3.1-8b").to_utf8_buffer()
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
 		assert_eq(result.model, "llama-3.1-8b")
 
 	func test_usage_is_populated() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
@@ -143,14 +141,10 @@ class TestChatCompletion extends GutTest:
 		assert_eq(result.usage["total_tokens"], 15)
 
 	func test_refusal_is_populated() -> void:
-		client.preset_response = {
-			"ok": true,
-			"body":
-			(
-				make_json_res("", "stop", "gpt-4o", "I can't help with that.")
-				. to_utf8_buffer()
-			)
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("", "stop", "gpt-4o", "I can't help with that.")
+			. to_utf8_buffer()
+		)
 		var result := await client.chat_completion(
 			[C3OpenAIClient.make_user_msg("Do something bad")]
 		)
@@ -158,9 +152,9 @@ class TestChatCompletion extends GutTest:
 
 	func test_uses_correct_endpoint() -> void:
 		client.base_url = "http://example.com/v1"
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_eq(
 			client.request_log[0]["url"],
@@ -168,17 +162,17 @@ class TestChatCompletion extends GutTest:
 		)
 
 	func test_messages_sent_in_body() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var messages := [C3OpenAIClient.make_user_msg("Hello")]
 		await client.chat_completion(messages)
 		assert_eq(client.request_log[0]["body"]["messages"], messages)
 
 	func test_options_model_sent_in_body() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.model = "llama-3.1-8b"
 		await client.chat_completion(
@@ -187,16 +181,16 @@ class TestChatCompletion extends GutTest:
 		assert_eq(client.request_log[0]["body"]["model"], "llama-3.1-8b")
 
 	func test_temperature_omitted_when_nan() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_false(client.request_log[0]["body"].has("temperature"))
 
 	func test_temperature_sent_when_set() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.temperature = 0.2
 		await client.chat_completion(
@@ -205,16 +199,16 @@ class TestChatCompletion extends GutTest:
 		assert_eq(client.request_log[0]["body"]["temperature"], 0.2)
 
 	func test_max_tokens_omitted_when_minus_one() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_false(client.request_log[0]["body"].has("max_tokens"))
 
 	func test_max_tokens_sent_when_set() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.max_tokens = 100
 		await client.chat_completion(
@@ -223,16 +217,16 @@ class TestChatCompletion extends GutTest:
 		assert_eq(client.request_log[0]["body"]["max_tokens"], 100)
 
 	func test_response_format_omitted_when_empty() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_false(client.request_log[0]["body"].has("response_format"))
 
 	func test_response_format_sent_when_set() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res('{"joke":"Why did the chicken cross the road?"}').to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res('{"joke":"Why did the chicken cross the road?"}').to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.response_format = {
 			"type": "json_schema",
@@ -254,55 +248,53 @@ class TestChatCompletion extends GutTest:
 		)
 
 	func test_returns_failed_response_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await (
 			client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		)
 		assert_false(result.ok)
 
-	func test_propagates_transport_error_unchanged() -> void:
-		var err := C3OpenAIClient.ApiError.transport("Could not connect.")
-		client.preset_response = {"ok": false, "error": err}
+	func test_propagates_transport_error() -> void:
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.chat_completion(
 			[C3OpenAIClient.make_user_msg("Hello")]
 		)
-		assert_same(result.error, err)
+		assert_eq(result.error.kind, &"transport")
+		assert_eq(result.error.message, "Could not connect.")
 
 	func test_emits_request_failed_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		watch_signals(client)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_http_failure() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Connection error.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Connection error."
+		)
 		var result := await client.chat_completion(
 			[C3OpenAIClient.make_user_msg("Hello")]
 		)
 		assert_false(result.ok)
 
 	func test_emits_request_failed_on_http_failure() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Connection error.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Connection error."
+		)
 		watch_signals(client)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_invalid_json() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		var result := await client.chat_completion(
 			[C3OpenAIClient.make_user_msg("Hello")]
 		)
@@ -311,17 +303,17 @@ class TestChatCompletion extends GutTest:
 		assert_eq(result.error.raw, "not json")
 
 	func test_emits_request_failed_on_invalid_json() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		watch_signals(client)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_empty_choices() -> void:
-		client.preset_response = {
-			"ok": true, "body": '{"choices": []}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"choices": []}'.to_utf8_buffer()
+		)
 		var result := await client.chat_completion(
 			[C3OpenAIClient.make_user_msg("Hello")]
 		)
@@ -329,17 +321,17 @@ class TestChatCompletion extends GutTest:
 		assert_eq(result.error.kind, &"parse")
 
 	func test_emits_request_failed_on_empty_choices() -> void:
-		client.preset_response = {
-			"ok": true, "body": '{"choices": []}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"choices": []}'.to_utf8_buffer()
+		)
 		watch_signals(client)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_malformed_choice() -> void:
-		client.preset_response = {
-			"ok": true, "body": '{"choices": [{}]}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"choices": [{}]}'.to_utf8_buffer()
+		)
 		var result := await client.chat_completion(
 			[C3OpenAIClient.make_user_msg("Hello")]
 		)
@@ -347,26 +339,26 @@ class TestChatCompletion extends GutTest:
 		assert_eq(result.error.kind, &"parse")
 
 	func test_emits_request_failed_on_malformed_choice() -> void:
-		client.preset_response = {
-			"ok": true, "body": '{"choices": [{}]}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"choices": [{}]}'.to_utf8_buffer()
+		)
 		watch_signals(client)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_signal_emitted(client, "request_failed")
 
 	func test_warns_when_model_is_empty() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		await client.chat_completion([C3OpenAIClient.make_user_msg("Hello")])
 		assert_push_warning(
 			"C3OpenAIClient: opts.model is empty — using server default."
 		)
 
 	func test_no_warning_when_model_is_set() -> void:
-		client.preset_response = {
-			"ok": true, "body": make_json_res("Hi").to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			make_json_res("Hi").to_utf8_buffer()
+		)
 		var opts := C3OpenAIClient.ChatOptions.new()
 		opts.model = "gpt-4o"
 		await client.chat_completion(

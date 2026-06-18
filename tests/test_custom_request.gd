@@ -8,9 +8,9 @@ class TestCustomRequest extends GutTest:
 	func before_each() -> void:
 		client = C3TestDoubles.TestableClient.new()
 		add_child_autofree(client)
-		client.preset_response = {
-			"ok": true, "body": '{"object": "list"}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"object": "list"}'.to_utf8_buffer()
+		)
 
 	func test_returns_custom_request_response() -> void:
 		var result := await client.custom_request("/embeddings", "POST")
@@ -76,16 +76,15 @@ class TestCustomRequest extends GutTest:
 		assert_true(headers.has("Authorization: Bearer secret"))
 
 	func test_raw_body_contains_parsed_response() -> void:
-		client.preset_response = {
-			"ok": true,
-			"body": '{"object": "embedding.list", "model": "m"}'.to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			'{"object": "embedding.list", "model": "m"}'.to_utf8_buffer()
+		)
 		var result := await client.custom_request("/embeddings", "POST")
 		assert_true(result.ok)
 		assert_eq(result.raw_body, {"object": "embedding.list", "model": "m"})
 
 	func test_empty_body_response_is_success() -> void:
-		client.preset_response = {"ok": true, "body": PackedByteArray()}
+		client.preset_response = C3TestDoubles.ok_response(PackedByteArray())
 		var result := await client.custom_request("/files/abc", "DELETE")
 		assert_true(result.ok)
 		assert_null(result.error)
@@ -101,42 +100,40 @@ class TestCustomRequest extends GutTest:
 		assert_push_error("Unsupported HTTP method")
 
 	func test_returns_failed_response_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.custom_request("/embeddings", "POST")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"transport")
 
 	func test_emits_request_failed_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		watch_signals(client)
 		await client.custom_request("/embeddings", "POST")
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_invalid_json() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		var result := await client.custom_request("/embeddings", "POST")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
 
 	func test_returns_failed_response_on_non_object_json() -> void:
-		client.preset_response = {"ok": true, "body": "[1, 2]".to_utf8_buffer()}
+		client.preset_response = C3TestDoubles.ok_response("[1, 2]".to_utf8_buffer())
 		var result := await client.custom_request("/embeddings", "POST")
 		assert_false(result.ok)
 		assert_eq(result.error.kind, &"parse")
 		assert_eq(result.error.raw, "[1, 2]")
 
 	func test_emits_request_failed_on_parse_failure() -> void:
-		client.preset_response = {
-			"ok": true, "body": "not json".to_utf8_buffer()
-		}
+		client.preset_response = C3TestDoubles.ok_response(
+			"not json".to_utf8_buffer()
+		)
 		watch_signals(client)
 		await client.custom_request("/embeddings", "POST")
 		assert_signal_emitted(client, "request_failed")

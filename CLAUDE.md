@@ -40,14 +40,14 @@ The addon lives entirely in [c3_openai_client/](c3_openai_client/).
 - `create_transcription(audio, opts)` → `TranscriptionResponse`
 - `custom_request(path, method, body, query)` → `CustomRequestResponse` (escape hatch for endpoints the client doesn't cover; parsed JSON object on `raw_body`, empty 2xx body succeeds, non-object JSON is a parse failure)
 
-**`C3SSERequest`** ([c3_openai_client/utils/c3_sse_request.gd](c3_openai_client/utils/c3_sse_request.gd)) — Custom SSE implementation built on `StreamPeerTCP` + `StreamPeerTLS`. Godot's `HTTPRequest` doesn't support streaming, so this class handles raw TCP/TLS connection, HTTP request formatting, chunked transfer decoding, and SSE event parsing. Emits signals: `event_received`, `finished`, `response_error`, `request_failed`.
+**`C3HTTPRequest`** ([c3_openai_client/utils/c3_http_request.gd](c3_openai_client/utils/c3_http_request.gd)) — The single transport for both one-shot requests and streaming. A general-purpose async `HTTPClient`-based client (no scene tree needed) whose static `request()`/`request_raw()` return a `Response` (`ok`, `status`, `body`, `text`, `json`, `error`). Streaming is just a request with `Options.on_sse_event` set: the call resolves when the stream closes, dispatching each SSE event to the callback, and `Options.cancellation_token` aborts it early. `C3OpenAIClient._http_get`/`_http_post`/`_http_post_multipart`/`_http_request`/`_http_stream` wrap it (overridable as test seams), and `_to_api_error` maps a failed `Response` into the addon's `ApiError`.
 
 **Response/options types** are inner classes defined in `c3_openai_client.gd`:
 - `ChatOptions`, `ImageOptions`, `SpeechOptions`, `TranscriptionOptions` — input option bags
 - `ChatCompletionResponse`, `ImageGenerationResponse`, `SpeechResponse`, `TranscriptionResponse`, `ModelsResponse`, `CustomRequestResponse` — all carry `ok: bool` and optional `error: ApiError`
 - `ApiError` — typed errors with `kind` string: `"transport"`, `"http"`, `"api"`, `"parse"`, `"client"`, `"cancelled"`
 
-**Tests** are in [tests/](tests/) using the GUT framework (in [addons/gut/](addons/gut/)). Test doubles live in [tests/c3_test_doubles.gd](tests/c3_test_doubles.gd) — `TestableClient` exposes internals for unit testing and `FakeSSERequest` stubs streaming.
+**Tests** are in [tests/](tests/) using the GUT framework (in [addons/gut/](addons/gut/)). Test doubles live in [tests/c3_test_doubles.gd](tests/c3_test_doubles.gd) — `TestableClient` overrides the `_http_*` seams to return a preset `C3HTTPRequest.Response` (built with the `ok_response`/`http_error_response`/`transport_error_response`/`client_error_response` static helpers) and stubs streaming by parking `_http_stream` until the test drives it via `stream_on_event` / `_stream_drive`.
 
 **Examples** in [examples/](examples/) demonstrate usage patterns but are not part of the addon itself.
 

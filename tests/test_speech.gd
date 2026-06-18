@@ -21,6 +21,8 @@ class TestSpeechOptions extends GutTest:
 
 ## Tests for [method C3OpenAIClient.create_speech].
 class TestCreateSpeech extends GutTest:
+	const C3HTTPRequest := preload("res://c3_openai_client/utils/c3_http_request.gd")
+
 	var client: C3TestDoubles.TestableClient
 
 	func before_each() -> void:
@@ -28,8 +30,10 @@ class TestCreateSpeech extends GutTest:
 		add_child_autofree(client)
 
 	## A preset success response carrying minimal raw PCM bytes.
-	func ok_pcm() -> Dictionary:
-		return {"ok": true, "body": PackedByteArray([0x00, 0x01, 0x02, 0x03])}
+	func ok_pcm() -> C3HTTPRequest.Response:
+		return C3TestDoubles.ok_response(
+			PackedByteArray([0x00, 0x01, 0x02, 0x03])
+		)
 
 	func test_returns_speech_response() -> void:
 		client.preset_response = ok_pcm()
@@ -94,7 +98,7 @@ class TestCreateSpeech extends GutTest:
 
 	func test_pcm_stores_raw_bytes_as_data() -> void:
 		var raw := PackedByteArray([0xAA, 0xBB, 0xCC, 0xDD])
-		client.preset_response = {"ok": true, "body": raw}
+		client.preset_response = C3TestDoubles.ok_response(raw)
 		var result := await client.create_speech("Hello")
 		var wav := result.stream as AudioStreamWAV
 		assert_eq(wav.data, raw)
@@ -123,35 +127,31 @@ class TestCreateSpeech extends GutTest:
 		assert_false(wav.stereo)
 
 	func test_returns_failed_response_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		var result := await client.create_speech("Hello")
 		assert_false(result.ok)
 
 	func test_emits_request_failed_on_network_error() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Could not connect.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Could not connect."
+		)
 		watch_signals(client)
 		await client.create_speech("Hello")
 		assert_signal_emitted(client, "request_failed")
 
 	func test_returns_failed_response_on_http_failure() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Connection error.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Connection error."
+		)
 		var result := await client.create_speech("Hello")
 		assert_false(result.ok)
 
 	func test_emits_request_failed_on_http_failure() -> void:
-		client.preset_response = {
-			"ok": false,
-			"error": C3OpenAIClient.ApiError.transport("Connection error.")
-		}
+		client.preset_response = C3TestDoubles.transport_error_response(
+			"Connection error."
+		)
 		watch_signals(client)
 		await client.create_speech("Hello")
 		assert_signal_emitted(client, "request_failed")
