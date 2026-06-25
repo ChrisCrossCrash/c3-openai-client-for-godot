@@ -1,8 +1,7 @@
 # C3 HTTP Request
-# v0.2.0
+# v0.3.1
 # Modified from:
-# https://github.com/ChrisCrossCrash/c3-http-request/blob/3c636292eb12cd507531a1f73347ce2af28d04af/c3_http_request/c3_http_request.gd
-# Modifications are noted with a MODIFIED comment.
+# https://github.com/ChrisCrossCrash/c3-http-request/blob/v0.3.1/c3_http_request/c3_http_request.gd
 
 # MODIFIED: Removed global class_name to prevent conflicts.
 # class_name C3HTTPRequest
@@ -17,7 +16,7 @@
 enum Method { GET = 0, HEAD, POST, PUT, DELETE, OPTIONS, PATCH }
 
 ## The installed version of this addon, e.g. for logging or feature gating.
-const VERSION := "v0.2.0"
+const VERSION := "v0.3.1"
 
 const _METHOD_MAP: Dictionary = {
 	Method.GET: HTTPClient.METHOD_GET,
@@ -30,6 +29,13 @@ const _METHOD_MAP: Dictionary = {
 }
 
 static var _impl: _Impl = _Impl.new()
+
+
+func _init() -> void:
+	push_warning(
+		"C3HTTPRequest is not meant to be instantiated like Godot's native "
+		+ "HTTPRequest. Call C3HTTPRequest.request() directly."
+	)
 
 
 ## Sends an HTTP request to [param url] and returns the response. [br]
@@ -78,12 +84,39 @@ class Options:
 	var timeout: float = 0.0
 	## Maximum response body size in bytes. [code]-1[/code] is unlimited.
 	var body_size_limit: int = -1
-	## Size of each read buffer in bytes. Lower values reduce peak memory use
-	## during large downloads.
+	## Size in bytes of the buffer used to read the response body off the socket
+	## (via [method HTTPClient.set_read_chunk_size]). These are raw, as-received
+	## bytes — [i]before[/i] decompression — so for a compressed response this
+	## bounds the compressed read, not the decoded output. Lower values reduce
+	## peak memory use during large downloads.
 	var download_chunk_size: int = 65536
-	## When [code]true[/code], sends [code]Accept-Encoding: gzip, deflate[/code]
-	## and decompresses the response body automatically. Has no effect when
-	## [member download_file] is set.
+	## When [code]true[/code], sends [code]Accept-Encoding: gzip[/code]
+	## and decompresses the response body automatically. Applies to
+	## [member download_file] downloads too: compressed bytes are streamed through
+	## the decompressor straight to disk, so the file holds the decoded content.
+	## [br][br]
+	## When [code]false[/code], no [code]Accept-Encoding[/code] header is sent and
+	## no decompression is performed (matching native [HTTPRequest]). Note this is
+	## [i]not[/i] the same as refusing compression: sending no
+	## [code]Accept-Encoding[/code] tells the server any encoding is acceptable, so
+	## it may still return a [code]Content-Encoding: gzip[/code] body. You then
+	## receive it exactly as sent — the raw, still-compressed bytes, for you to
+	## decode. To actually forbid compression, set your own
+	## [code]Accept-Encoding: identity[/code] in [code]custom_headers[/code]. A
+	## caller-supplied [code]Accept-Encoding[/code] always takes precedence and
+	## suppresses the automatic one.
+	## [br][br]
+	## Only [code]gzip[/code] is requested and decoded — never [code]deflate[/code],
+	## which is where this differs from native [HTTPRequest] (it advertises both).
+	## HTTP [code]deflate[/code] is ambiguous: the spec says it is zlib-wrapped
+	## (RFC 1950), but many servers send raw deflate (RFC 1951) instead, and the two
+	## cannot be told apart reliably. Native [HTTPRequest] assumes zlib-wrapped and
+	## fails to decode raw-deflate responses — a rare bug that is hard to trace
+	## because it only surfaces against the uncommon servers that send raw deflate.
+	## C3HTTPRequest sidesteps it by never requesting deflate at all; gzip is
+	## near-universal and brotli covers the rest, so deflate is effectively a rounding
+	## error on the modern web. If you genuinely need it, request it via
+	## [code]custom_headers[/code] and decode the bytes yourself.
 	var accept_gzip: bool = true
 	## Maximum number of redirects to follow. [code]0[/code] disables following.
 	var max_redirects: int = 8
@@ -118,8 +151,12 @@ class Options:
 	## [/codeblock]
 	var use_threads: bool = false
 	## Path to write the response body to on disk. When non-empty,
-	## [member Response.body] is empty and the data is in the file. A partial
-	## file may be left on disk if the request fails after the connection opens.
+	## [member Response.body] is empty and the data is in the file. The file is
+	## created only once the response body starts arriving, so a request that fails
+	## while resolving, connecting, or sending leaves the path untouched — never
+	## truncating an existing file it will not fill. If the transfer fails after
+	## writing has begun (timeout, cancellation, a decode error, or exceeding
+	## [member body_size_limit]), the partial file is removed.
 	var download_file: String = ""
 	## TLS options for HTTPS connections. [code]null[/code] uses
 	## [method TLSOptions.client] (validates the server certificate). Override
@@ -324,21 +361,27 @@ class _Impl:
 		custom_headers: PackedStringArray,
 		method: int,
 		request_data: Variant,
-		options: Options, # MODIFIED
+		options: Options,
 		_redirects_left: int = -1,
-		_on_worker: bool = false
-	) -> Response: # MODIFIED
+		_on_worker: bool = false,
+		_start_ms: int = -1
+	) -> Response:
 		# options.use_threads is read exactly once — here — to decide whether to
 		# spawn a worker. Every downstream poll and dispatch decision uses _on_worker
 		# instead, so the fallback path (threads requested but unavailable) behaves
 		# identically to the cooperative path.
 		if options.use_threads and not _on_worker and _threads_available():
 			return await _run_threaded(
-				url, custom_headers, method, request_data, options, _redirects_left
+				url,
+				custom_headers,
+				method,
+				request_data,
+				options,
+				_redirects_left
 			)
 
 		if _cancelled(options):
-			return _fail(RequestError.cancelled("Request was cancelled.")) # MODIFIED
+			return _fail(RequestError.cancelled("Request was cancelled."))
 		var redirects_left := (
 			options.max_redirects if _redirects_left < 0 else _redirects_left
 		)
@@ -347,22 +390,11 @@ class _Impl:
 
 		var parsed := _parse_url(url)
 		if parsed.is_empty():
-			return _fail(RequestError.client_error( # MODIFIED
-					'Invalid URL: "%s".' % url
-			))
+			return _fail(RequestError.client_error('Invalid URL: "%s".' % url))
 
-		var file: FileAccess = null
-		if not options.download_file.is_empty() and not streaming:
-			file = FileAccess.open(options.download_file, FileAccess.WRITE)
-			if file == null:
-				return _fail(RequestError.client_error( # MODIFIED
-					"Cannot open download file: \"%s\"." % options.download_file
-				))
-
-		var all_headers := PackedStringArray()
-		if options.accept_gzip and options.download_file.is_empty() and not streaming:
-			all_headers.append("Accept-Encoding: gzip, deflate")
-		all_headers.append_array(custom_headers)
+		var all_headers := _build_request_headers(
+			custom_headers, options.accept_gzip, streaming
+		)
 
 		var client := HTTPClient.new()
 		client.set_read_chunk_size(options.download_chunk_size)
@@ -383,12 +415,12 @@ class _Impl:
 		else:
 			err = client.connect_to_host(parsed["host"], parsed["port"])
 		if err != OK:
-			return _fail(RequestError.transport( # MODIFIED
+			return _fail(RequestError.transport(
 				"Failed to start connection (error %d)." % err
 			))
 
 		var tree := Engine.get_main_loop() as SceneTree
-		var start_ms := Time.get_ticks_msec()
+		var start_ms := Time.get_ticks_msec() if _start_ms < 0 else _start_ms
 		var last_status := HTTPClient.STATUS_DISCONNECTED
 
 		while true:
@@ -399,17 +431,13 @@ class _Impl:
 			]:
 				break
 			if _timed_out(start_ms, options.timeout):
-				return _fail(RequestError.timed_out( # MODIFIED
-					"Timed out while connecting."
-				))
+				return _fail(RequestError.timed_out("Timed out while connecting."))
 			if _cancelled(options):
-				return _fail(RequestError.cancelled( # MODIFIED
-						"Request was cancelled."
-				))
+				return _fail(RequestError.cancelled("Request was cancelled."))
 			await _pump(tree, _on_worker)
 
 		if client.get_status() != HTTPClient.STATUS_CONNECTED:
-			return _fail(RequestError.transport( # MODIFIED
+			return _fail(RequestError.transport(
 				"Could not connect (status %d)." % client.get_status()
 			))
 
@@ -422,29 +450,27 @@ class _Impl:
 				method, parsed["path"], all_headers, request_data
 			)
 		if err != OK:
-			return _fail(RequestError.transport( # MODIFIED
+			return _fail(RequestError.transport(
 				"Failed to send request (error %d)." % err
 			))
 
 		while true:
 			client.poll()
-			last_status = _emit_status_change(client, last_status, options, _on_worker)
+			last_status = _emit_status_change(
+				client, last_status, options, _on_worker
+			)
 			if client.get_status() != HTTPClient.STATUS_REQUESTING:
 				break
 			if _timed_out(start_ms, options.timeout):
-				return _fail(RequestError.timed_out( # MODIFIED
-					"Timed out waiting for response."
-				))
+				return _fail(
+					RequestError.timed_out("Timed out waiting for response.")
+				)
 			if _cancelled(options):
-				return _fail(RequestError.cancelled( # MODIFIED
-					"Request was cancelled."
-				))
+				return _fail(RequestError.cancelled("Request was cancelled."))
 			await _pump(tree, _on_worker)
 
 		if not client.has_response():
-			return _fail(RequestError.transport( # MODIFIED
-				"No response received."
-			))
+			return _fail(RequestError.transport("No response received."))
 
 		var status := client.get_response_code()
 		var resp_headers: PackedStringArray = client.get_response_headers()
@@ -464,24 +490,49 @@ class _Impl:
 		# Content-Length if the server sent one, else -1 (e.g. chunked responses).
 		var total_bytes := client.get_response_body_length()
 		var bytes_received := 0
+		# Bytes actually written to the download file (decompressed, when decoding).
+		var bytes_written := 0
+		# Open the download target only now, at the body phase — never earlier. A
+		# request that fails while connecting or sending leaves the path untouched
+		# rather than truncating it to an empty file it will never fill, and there is
+		# nothing to clean up on those early-return paths.
+		var file: FileAccess = null
+		if not options.download_file.is_empty() and not streaming:
+			file = FileAccess.open(options.download_file, FileAccess.WRITE)
+			if file == null:
+				return _fail(RequestError.client_error(
+					"Cannot open download file: \"%s\"." % options.download_file
+				))
+		# When downloading to a file, decompress the body on the fly so the file
+		# holds decoded content rather than raw compressed bytes. SSE streams are
+		# never decompressed.
+		var download_decoder: StreamPeerGZIP = null
+		if file != null and not sse_mode:
+			download_decoder = _make_download_decoder(
+				resp_headers, options.accept_gzip
+			)
 		while client.get_status() == HTTPClient.STATUS_BODY:
 			# While streaming, timeout is idle time since the last bytes, not total
 			# stream duration — a healthy long-lived stream must not be cut off.
 			if _timed_out(last_recv_ms if sse_mode else start_ms, options.timeout):
 				if file != null:
 					file.close()
-				return _fail(RequestError.timed_out( # MODIFIED
+					DirAccess.remove_absolute(options.download_file)
+				return _fail(RequestError.timed_out(
 					"Stream idle for too long." if sse_mode
 					else "Timed out while reading body."
 				))
 			if _cancelled(options):
 				if file != null:
 					file.close()
-				return _fail(RequestError.cancelled( # MODIFIED
-					"Request was cancelled."
-				))
+					DirAccess.remove_absolute(options.download_file)
+				return _fail(RequestError.cancelled("Request was cancelled."))
 			client.poll()
-			last_status = _emit_status_change(client, last_status, options, _on_worker)
+			last_status = _emit_status_change(
+				client, last_status, options, _on_worker
+			)
+			if client.get_status() != HTTPClient.STATUS_BODY:
+				break
 			var chunk: PackedByteArray = client.read_response_body_chunk()
 			if chunk.is_empty():
 				await _pump(tree, _on_worker)
@@ -494,26 +545,64 @@ class _Impl:
 					options.body_size_limit >= 0
 					and sse_buffer.size() + chunk.size() > options.body_size_limit
 				):
-					return _fail(RequestError.body_size_limit_exceeded( # MODIFIED
+					return _fail(RequestError.body_size_limit_exceeded(
 						"SSE event exceeded limit of %d bytes."
 						% options.body_size_limit
 					))
 				sse_buffer.append_array(chunk)
 				sse_buffer = _drain_sse_buffer(sse_buffer, sse_sink)
 				continue
-			if (
-				options.body_size_limit >= 0
-				and body_bytes.size() + chunk.size() > options.body_size_limit
-			):
-				if file != null:
-					file.close()
-				return _fail(RequestError.body_size_limit_exceeded( # MODIFIED
-					"Response body exceeded limit of %d bytes."
-					% options.body_size_limit
-				))
 			if file != null:
-				file.store_buffer(chunk)
+				# The limit is applied to bytes written to disk (decompressed),
+				# matching native — this is what actually bounds a decompression
+				# bomb, which a compressed-byte limit would not. The decoder is
+				# given the remaining allowance so it stops before ballooning
+				# memory rather than decoding a whole bomb chunk first.
+				var to_write := chunk
+				if download_decoder != null:
+					var budget := (
+						options.body_size_limit - bytes_written
+						if options.body_size_limit >= 0
+						else -1
+					)
+					var decoded := _decode_chunk(
+						download_decoder,
+						chunk,
+						options.download_chunk_size,
+						budget
+					)
+					if not decoded["ok"]:
+						file.close()
+						DirAccess.remove_absolute(options.download_file)
+						return _fail(RequestError.transport(
+							"Failed to decompress download stream."
+						))
+					to_write = decoded["data"]
+				if (
+					options.body_size_limit >= 0
+					and bytes_written + to_write.size() > options.body_size_limit
+				):
+					file.close()
+					DirAccess.remove_absolute(options.download_file)
+					return _fail(RequestError.body_size_limit_exceeded(
+						"Response body exceeded limit of %d bytes."
+						% options.body_size_limit
+					))
+				file.store_buffer(to_write)
+				bytes_written += to_write.size()
 			else:
+				# In-memory limit here is on received (compressed) bytes. The
+				# decompressed output is bounded separately by _maybe_decompress_body
+				# below, which caps decompression at body_size_limit so a zip bomb
+				# under this check can't inflate to unbounded memory.
+				if (
+					options.body_size_limit >= 0
+					and body_bytes.size() + chunk.size() > options.body_size_limit
+				):
+					return _fail(RequestError.body_size_limit_exceeded(
+						"Response body exceeded limit of %d bytes."
+						% options.body_size_limit
+					))
 				body_bytes.append_array(chunk)
 			bytes_received += chunk.size()
 			_emit(options.on_progress, _on_worker, [bytes_received, total_bytes])
@@ -528,45 +617,54 @@ class _Impl:
 			if not tail.strip_edges().is_empty():
 				_emit_sse_event(tail, sse_sink)
 
-		if options.accept_gzip and file == null and not body_bytes.is_empty():
-			var encoding := _header_value(resp_headers, "Content-Encoding").to_lower()
-			var mode := -1
-			if encoding == "gzip":
-				mode = FileAccess.COMPRESSION_GZIP
-			elif encoding == "deflate":
-				mode = FileAccess.COMPRESSION_DEFLATE
-			if mode != -1:
-				var decompressed := body_bytes.decompress_dynamic(-1, mode)
-				if not decompressed.is_empty():
-					body_bytes = decompressed
+		if file == null:
+			var decoded: Variant = _maybe_decompress_body(
+				body_bytes,
+				resp_headers,
+				options.accept_gzip,
+				options.body_size_limit,
+				options.download_chunk_size
+			)
+			if decoded is RequestError:
+				return _fail(decoded)
+			body_bytes = decoded
 
 		if status >= 300 and status < 400 and redirects_left > 0:
 			var location := _header_value(resp_headers, "Location")
 			if not location.is_empty():
-				return await execute(
-					_resolve_redirect_url(
-						location,
-						parsed["host"],
-						parsed["port"],
-						parsed["tls"],
-						parsed["path"]
-					),
-					custom_headers,
+				var redirect_url := _resolve_redirect_url(
+					location,
+					parsed["host"],
+					parsed["port"],
+					parsed["tls"],
+					parsed["path"]
+				)
+				var redirect_headers := _strip_auth_if_cross_origin(
+					custom_headers, parsed, _parse_url(redirect_url)
+				)
+				var redirect_res: Response = await execute(
+					redirect_url,
+					redirect_headers,
 					_redirect_method(method, status),
 					_redirect_body(method, status, request_data),
 					options,
 					redirects_left - 1,
-					_on_worker
+					_on_worker,
+					start_ms
 				)
+				if not redirect_res.ok and not options.download_file.is_empty():
+					if FileAccess.file_exists(options.download_file):
+						DirAccess.remove_absolute(options.download_file)
+				return redirect_res
 
-		var res := Response.new() # MODIFIED
+		var res := Response.new()
 		res.status = status
 		res.headers = resp_headers
 		res.body = body_bytes if file == null else PackedByteArray()
 		if status < 200 or status >= 300:
 			res.ok = false
-			var e := RequestError.new() # MODIFIED
-			e.kind = RequestError.Kind.HTTP # MODIFIED
+			var e := RequestError.new()
+			e.kind = RequestError.Kind.HTTP
 			e.status = status
 			# A 3xx carrying a Location that we stopped following only because the
 			# redirect budget is spent. Say so, otherwise the bare status reads
@@ -602,9 +700,9 @@ class _Impl:
 		custom_headers: PackedStringArray,
 		method: int,
 		request_data: Variant,
-		options: Options, # MODIFIED
+		options: Options,
 		redirects_left: int
-	) -> Response: # MODIFIED
+	) -> Response:
 		var tree := Engine.get_main_loop() as SceneTree
 		# Marshaled callbacks are dispatched with call_deferred from the worker, so
 		# they run on the main thread at the next message-queue flush. We must drain
@@ -617,10 +715,15 @@ class _Impl:
 		)
 		var thread := Thread.new()
 		thread.start(
-			func() -> Response: # MODIFIED
+			func() -> Response:
 				return await execute(
-					url, custom_headers, method, request_data, options,
-					redirects_left, true
+					url,
+					custom_headers,
+					method,
+					request_data,
+					options,
+					redirects_left,
+					true
 				)
 		)
 		while thread.is_alive():
@@ -632,11 +735,11 @@ class _Impl:
 		# adds an await that actually suspends, the function returns a coroutine
 		# state instead — fail loudly here rather than corrupting the result.
 		assert(
-			result is Response, # MODIFIED
+			result is Response,
 			"C3HTTPRequest: threaded worker suspended; the worker path must run "
 			+ "synchronously (see _pump). Did a new await get added to execute()?"
 		)
-		var res: Response = result # MODIFIED
+		var res: Response = result
 		if has_observers:
 			# One more frame guarantees a message-queue flush after the worker has
 			# returned, so all deferred callbacks fire before this Response resolves.
@@ -702,10 +805,7 @@ class _Impl:
 					port = port_str.to_int()
 				host = host_part.substr(0, colon)
 		return {
-			"host": host,
-			"port": port,
-			"path": path,
-			"tls": scheme == "https"
+			"host": host, "port": port, "path": path, "tls": scheme == "https"
 		}
 
 	# Resolves which proxy applies to each scheme. A key ("http"/"https") is present
@@ -724,7 +824,7 @@ class _Impl:
 			return false
 		return (Time.get_ticks_msec() - start_ms) / 1000.0 >= timeout
 
-	func _cancelled(options: Options) -> bool: # MODIFIED
+	func _cancelled(options: Options) -> bool:
 		return (
 			options.cancellation_token != null
 			and options.cancellation_token.is_cancelled()
@@ -735,7 +835,7 @@ class _Impl:
 	func _emit_status_change(
 		client: HTTPClient,
 		last_status: HTTPClient.Status,
-		options: Options, # MODIFIED
+		options: Options,
 		on_worker: bool
 	) -> HTTPClient.Status:
 		var current := client.get_status()
@@ -744,11 +844,149 @@ class _Impl:
 		return current
 
 	func _header_value(headers: PackedStringArray, name: String) -> String:
-		var prefix := name.to_lower() + ": "
+		var prefix := name.to_lower() + ":"
 		for header: String in headers:
 			if header.to_lower().begins_with(prefix):
 				return header.substr(prefix.length()).strip_edges()
 		return ""
+
+	# Merges the caller's headers with the gzip opt-in. Our Accept-Encoding is added
+	# only when accept_gzip is on, the request isn't an SSE stream, and the caller
+	# hasn't already set their own Accept-Encoding — a caller-supplied value wins,
+	# matching native HTTPRequest. We advertise gzip only, never deflate; see the
+	# Options.accept_gzip doc comment for why.
+	func _build_request_headers(
+		custom_headers: PackedStringArray, accept_gzip: bool, streaming: bool
+	) -> PackedStringArray:
+		var headers := PackedStringArray()
+		if (
+			accept_gzip
+			and not streaming
+			and _header_value(custom_headers, "Accept-Encoding").is_empty()
+		):
+			headers.append("Accept-Encoding: gzip")
+		headers.append_array(custom_headers)
+		return headers
+
+	# Builds the on-the-fly decompressor for a download, or null when none applies.
+	# Decompression is gated on accept_gzip (accept_gzip == false means the caller
+	# opted out, so raw bytes pass through unchanged, like native HTTPRequest). Only
+	# gzip is decoded; see the Options.accept_gzip doc for why deflate isn't supported.
+	func _make_download_decoder(
+		resp_headers: PackedStringArray, accept_gzip: bool
+	) -> StreamPeerGZIP:
+		if not accept_gzip:
+			return null
+		if _header_value(resp_headers, "Content-Encoding").to_lower() != "gzip":
+			return null
+		var decoder := StreamPeerGZIP.new()
+		decoder.start_decompression(false)
+		return decoder
+
+	# Decompresses an in-memory gzip body, or returns it unchanged. Gated on
+	# accept_gzip (false means the caller opted out, so raw bytes pass through, like
+	# native HTTPRequest). Only gzip is decoded; see the Options.accept_gzip doc for why
+	# deflate isn't supported.
+	#
+	# Decodes through the same StreamPeerGZIP feed-and-drain path as the download
+	# branch (_decode_chunk), feeding the whole body as one chunk — so both paths and
+	# native HTTPRequest behave identically. This deliberately avoids
+	# PackedByteArray.decompress_dynamic, whose binding collapses three distinct
+	# outcomes — a valid empty body, an over-limit body, and a corrupt body — into the
+	# same empty return, which made an empty gzipped body look over-limit.
+	#
+	# Returns the decoded PackedByteArray on success (empty in, empty out — no false
+	# limit error), a BODY_SIZE_LIMIT_EXCEEDED RequestError when the decoded output
+	# would exceed body_size_limit (-1 disables the cap; the budget stops a zip bomb
+	# before it balloons), or a TRANSPORT RequestError when the stream is corrupt.
+	func _maybe_decompress_body(
+		body_bytes: PackedByteArray,
+		resp_headers: PackedStringArray,
+		accept_gzip: bool,
+		body_size_limit: int,
+		read_size: int = 65536
+	) -> Variant:
+		if not accept_gzip or body_bytes.is_empty():
+			return body_bytes
+		if _header_value(resp_headers, "Content-Encoding").to_lower() != "gzip":
+			return body_bytes
+		var decoder := StreamPeerGZIP.new()
+		decoder.start_decompression(false)
+		var decoded := _decode_chunk(
+			decoder, body_bytes, read_size, body_size_limit
+		)
+		if not decoded["ok"]:
+			return RequestError.transport("Failed to decompress response body.")
+		var out: PackedByteArray = decoded["data"]
+		if body_size_limit >= 0 and out.size() > body_size_limit:
+			return RequestError.body_size_limit_exceeded(
+				"Decompressed response body exceeded limit of %d bytes."
+				% body_size_limit
+			)
+		return out
+
+	# Feeds one compressed chunk into the decompressor and returns everything it
+	# decodes. Returns {"ok": bool, "data": PackedByteArray}; "ok" is false on a
+	# decode error (e.g. corrupt stream), with whatever decoded first.
+	#
+	# The decoder inflates input into a fixed-size internal buffer and refuses to
+	# accept more once it fills (StreamPeerGZIP.put_data returns ERR_OUT_OF_MEMORY).
+	# A highly compressible chunk can expand past that buffer many times over, so
+	# we feed incrementally with put_partial_data and drain between feeds to make
+	# room — never assuming the whole chunk's output fits at once.
+	#
+	# [param budget] caps decoded output: once more than [param budget] bytes have
+	# been produced, decoding stops early so a zip bomb can't balloon memory before
+	# the caller's size-limit check rejects it. A negative budget means unlimited.
+	func _decode_chunk(
+		decoder: StreamPeerGZIP,
+		chunk: PackedByteArray,
+		read_size: int,
+		budget: int = -1
+	) -> Dictionary:
+		var out := PackedByteArray()
+		var pos := 0
+		while pos < chunk.size():
+			var fed: Array = decoder.put_partial_data(chunk.slice(pos))
+			var feed_error: Error = fed[0]
+			var sent: int = fed[1]
+			if feed_error != OK:
+				return {"ok": false, "data": out}
+			pos += sent
+			var drained := _drain_decoder(decoder, read_size)
+			out.append_array(drained["data"])
+			if not drained["ok"]:
+				return {"ok": false, "data": out}
+			if budget >= 0 and out.size() > budget:
+				# Past the allowance — stop; the caller will reject this as over-limit.
+				break
+			if sent == 0 and (drained["data"] as PackedByteArray).is_empty():
+				# No input consumed and nothing decoded means no further progress is
+				# possible — the gzip stream has hit Z_STREAM_END — so stop spinning.
+				# Any bytes left in this chunk past the end marker are dropped. For a
+				# normal single-member response that's correct (trailing bytes aren't
+				# content). The gap: concatenated multi-member gzip (valid per RFC
+				# 1952) is truncated at the first member, since StreamPeerGZIP doesn't
+				# inflateReset for the next one. Fixing it would mean spinning up a
+				# fresh decoder from the leftover offset; rare enough over HTTP to
+				# defer. Without this guard the loop could spin forever on such input.
+				break
+		return {"ok": true, "data": out}
+
+	# Drains all decoded bytes currently available from the decompressor, reading
+	# in [param read_size] slices until it yields nothing more.
+	func _drain_decoder(decoder: StreamPeerGZIP, read_size: int) -> Dictionary:
+		var out := PackedByteArray()
+		while true:
+			var result: Array = decoder.get_partial_data(read_size)
+			var drain_error: Error = result[0]
+			var part: PackedByteArray = result[1]
+			if drain_error != OK:
+				return {"ok": false, "data": out}
+			if part.is_empty():
+				break
+			out.append_array(part)
+		return {"ok": true, "data": out}
 
 	# Resolves a Location header value against the original request per RFC 3986 §5.2.
 	func _resolve_redirect_url(
@@ -802,6 +1040,30 @@ class _Impl:
 		):
 			return ""
 		return request_data
+
+	# Returns headers with Authorization, Cookie, Cookie2, and Proxy-Authorization
+	# stripped when the redirect crosses origins (different host, port, or scheme).
+	# Same-origin redirects keep all headers intact so authenticated API chains work.
+	func _strip_auth_if_cross_origin(
+		headers: PackedStringArray,
+		origin: Dictionary,
+		redirect: Dictionary
+	) -> PackedStringArray:
+		if redirect.is_empty():
+			return headers
+		if (
+			origin["host"] == redirect["host"]
+			and origin["port"] == redirect["port"]
+			and origin["tls"] == redirect["tls"]
+		):
+			return headers
+		var sensitive := ["authorization", "cookie", "cookie2", "proxy-authorization"]
+		var out := PackedStringArray()
+		for header: String in headers:
+			var colon := header.find(":")
+			if colon == -1 or header.substr(0, colon).strip_edges().to_lower() not in sensitive:
+				out.append(header)
+		return out
 
 	# Carves every complete event out of [param buffer], dispatching each to
 	# [param on_event], and returns the trailing partial bytes (an incomplete
@@ -861,8 +1123,8 @@ class _Impl:
 			return
 		on_event.call("\n".join(data_lines), event_type)
 
-	func _fail(error: RequestError) -> Response: # MODIFIED
-		var res := Response.new() # MODIFIED
+	func _fail(error: RequestError) -> Response:
+		var res := Response.new()
 		res.ok = false
 		res.error = error
 		return res
