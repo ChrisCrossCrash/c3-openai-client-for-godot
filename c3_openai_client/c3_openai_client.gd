@@ -33,6 +33,8 @@ const _HTTP_METHODS: Dictionary = {
 ## Set to any non-empty value for servers that don't require authentication.
 var api_key := "no-key"
 
+var _session := C3Http.Session.new()
+
 
 ## Returns the list of model IDs available on the server.
 ## Returns a [ModelsResponse] with [member ModelsResponse.ok] set to
@@ -538,6 +540,7 @@ func _http_stream(
 	var opts := C3Http.Options.new()
 	opts.on_sse_event = on_event
 	opts.cancellation_token = token
+	opts.session = _session
 	return await C3Http.request(
 		url, headers, HTTPClient.METHOD_POST, body, opts
 	)
@@ -668,8 +671,10 @@ func _http_post_multipart(
 	multipart_headers.append(
 		"Content-Type: multipart/form-data; boundary=" + boundary
 	)
+	var opts := C3Http.Options.new()
+	opts.session = _session
 	return await C3Http.request_raw(
-		url, multipart_headers, HTTPClient.METHOD_POST, body
+		url, multipart_headers, HTTPClient.METHOD_POST, body, opts
 	)
 
 
@@ -687,7 +692,9 @@ func _http_request(
 	headers: PackedStringArray,
 	body: String = ""
 ) -> C3Http.Response:
-	return await C3Http.request(url, headers, method, body)
+	var opts := C3Http.Options.new()
+	opts.session = _session
+	return await C3Http.request(url, headers, method, body, opts)
 
 
 # Converts a failed C3Http.Response into the addon's typed ApiError. A

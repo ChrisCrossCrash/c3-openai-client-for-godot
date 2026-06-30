@@ -15,6 +15,7 @@ A drop-in Godot 4 client node for OpenAI-compatible HTTP APIs. Works with [OpenA
 - List available models
 - `custom_request()` escape hatch for any endpoint the client doesn't cover
 - Every method returns a typed response object — check `.ok` to detect failure
+- Persistent HTTP connections — requests reuse the same connection automatically, reducing latency (powered by [C3 HTTP Request](https://github.com/ChrisCrossCrash/c3-http-request))
 
 ## Design philosophy
 
