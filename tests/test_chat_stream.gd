@@ -3,7 +3,7 @@ extends GutTest
 
 ## Tests for [method C3OpenAIClient.chat_completion_stream].
 class TestChatCompletionStream extends GutTest:
-	const C3HTTPRequest := preload("res://c3_openai_client/utils/c3_http_request.gd")
+	const C3Http := preload("res://c3_openai_client/utils/c3_http_request.gd")
 
 	var client: C3TestDoubles.TestableClient
 
@@ -54,11 +54,11 @@ class TestChatCompletionStream extends GutTest:
 
 	## Pushes one SSE event into the parked stream.
 	func emit_event(data: String) -> void:
-		client.stream_on_event.call(data, "message")
+		client.stream_on_event.call(data, "message", "")
 
 	## Finishes the parked stream by setting its result and resuming it. The emit
 	## resumes the await synchronously, so `finished` fires before this returns.
-	func finish_stream(result: C3HTTPRequest.Response) -> void:
+	func finish_stream(result: C3Http.Response) -> void:
 		client.stream_result = result
 		client._stream_drive.emit()
 

@@ -24,7 +24,7 @@ class TestImageOptions extends GutTest:
 
 ## Tests for [method C3OpenAIClient.create_image].
 class TestCreateImage extends GutTest:
-	const C3HTTPRequest := preload("res://c3_openai_client/utils/c3_http_request.gd")
+	const C3Http := preload("res://c3_openai_client/utils/c3_http_request.gd")
 
 	var client: C3TestDoubles.TestableClient
 	var png_b64: String
@@ -38,7 +38,7 @@ class TestCreateImage extends GutTest:
 
 	## A preset success response carrying a real PNG as a b64_json data entry in
 	## the OpenAI image response shape. Pass a revised prompt to include one.
-	func ok_image(revised_prompt: Variant = null) -> C3HTTPRequest.Response:
+	func ok_image(revised_prompt: Variant = null) -> C3Http.Response:
 		var entry := {"b64_json": png_b64}
 		if revised_prompt != null:
 			entry["revised_prompt"] = revised_prompt

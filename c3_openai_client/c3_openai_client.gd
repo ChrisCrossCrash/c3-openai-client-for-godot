@@ -11,18 +11,18 @@ signal request_failed(error: ApiError)
 
 # The HTTP client is referenced by relative path rather than a global class_name
 # so that bundling this addon can't collide with another copy (e.g. from C3 Utils).
-const C3HTTPRequest := preload("utils/c3_http_request.gd")
+const C3Http := preload("utils/c3_http_request.gd")
 
-# HTTP method names accepted by custom_request(), mapped to the C3HTTPRequest.Method
+# HTTP method names accepted by custom_request(), mapped to the HTTPClient.Method
 # values taken by _http_request().
 const _HTTP_METHODS: Dictionary = {
-	"GET": C3HTTPRequest.Method.GET,
-	"HEAD": C3HTTPRequest.Method.HEAD,
-	"POST": C3HTTPRequest.Method.POST,
-	"PUT": C3HTTPRequest.Method.PUT,
-	"DELETE": C3HTTPRequest.Method.DELETE,
-	"OPTIONS": C3HTTPRequest.Method.OPTIONS,
-	"PATCH": C3HTTPRequest.Method.PATCH,
+	"GET": HTTPClient.METHOD_GET,
+	"HEAD": HTTPClient.METHOD_HEAD,
+	"POST": HTTPClient.METHOD_POST,
+	"PUT": HTTPClient.METHOD_PUT,
+	"DELETE": HTTPClient.METHOD_DELETE,
+	"OPTIONS": HTTPClient.METHOD_OPTIONS,
+	"PATCH": HTTPClient.METHOD_PATCH,
 }
 
 ## The base URL of the OpenAI-compatible API, including the version path.
@@ -479,7 +479,7 @@ func custom_request(
 	path: String, method: String, body: Dictionary = {}, query: Dictionary = {}
 ) -> CustomRequestResponse:
 	var res := CustomRequestResponse.new()
-	var method_id: C3HTTPRequest.Method = _HTTP_METHODS.get(method.to_upper(), -1)
+	var method_id: int = _HTTP_METHODS.get(method.to_upper(), -1)
 	if method_id == -1:
 		push_error('C3OpenAIClient: Unsupported HTTP method "%s".' % method)
 		res.ok = false
@@ -533,13 +533,13 @@ func _http_stream(
 	headers: PackedStringArray,
 	body: String,
 	on_event: Callable,
-	token: C3HTTPRequest.CancellationToken
-) -> C3HTTPRequest.Response:
-	var opts := C3HTTPRequest.Options.new()
+	token: C3Http.CancellationToken
+) -> C3Http.Response:
+	var opts := C3Http.Options.new()
 	opts.on_sse_event = on_event
 	opts.cancellation_token = token
-	return await C3HTTPRequest.request(
-		url, headers, C3HTTPRequest.Method.POST, body, opts
+	return await C3Http.request(
+		url, headers, HTTPClient.METHOD_POST, body, opts
 	)
 
 
@@ -615,9 +615,9 @@ func _audio_stream_wav_to_bytes(wav: AudioStreamWAV) -> PackedByteArray:
 # Internal HTTP POST method. Can be overridden in tests.
 func _http_post(
 	url: String, body: Dictionary, headers: PackedStringArray
-) -> C3HTTPRequest.Response:
+) -> C3Http.Response:
 	return await _http_request(
-		C3HTTPRequest.Method.POST, url, headers, JSON.stringify(body)
+		HTTPClient.METHOD_POST, url, headers, JSON.stringify(body)
 	)
 
 
@@ -630,7 +630,7 @@ func _http_post_multipart(
 	filename: String,
 	file_content_type: String,
 	headers: PackedStringArray
-) -> C3HTTPRequest.Response:
+) -> C3Http.Response:
 	var boundary := "GodotFormBoundary" + str(randi())
 	var body := PackedByteArray()
 	for key in form_fields:
@@ -668,39 +668,39 @@ func _http_post_multipart(
 	multipart_headers.append(
 		"Content-Type: multipart/form-data; boundary=" + boundary
 	)
-	return await C3HTTPRequest.request_raw(
-		url, multipart_headers, C3HTTPRequest.Method.POST, body
+	return await C3Http.request_raw(
+		url, multipart_headers, HTTPClient.METHOD_POST, body
 	)
 
 
 # Internal HTTP GET method. Can be overridden in tests.
 func _http_get(
 	url: String, headers: PackedStringArray
-) -> C3HTTPRequest.Response:
-	return await _http_request(C3HTTPRequest.Method.GET, url, headers)
+) -> C3Http.Response:
+	return await _http_request(HTTPClient.METHOD_GET, url, headers)
 
 
 # Internal request method. Can be overridden in tests.
 func _http_request(
-	method: C3HTTPRequest.Method,
+	method: HTTPClient.Method,
 	url: String,
 	headers: PackedStringArray,
 	body: String = ""
-) -> C3HTTPRequest.Response:
-	return await C3HTTPRequest.request(url, headers, method, body)
+) -> C3Http.Response:
+	return await C3Http.request(url, headers, method, body)
 
 
-# Converts a failed C3HTTPRequest.Response into the addon's typed ApiError. A
+# Converts a failed C3Http.Response into the addon's typed ApiError. A
 # non-2xx (HTTP) is routed through ApiError.from_response so the server's own
 # {"error": {...}} body is parsed into kind/code/type/message as before.
-func _to_api_error(resp: C3HTTPRequest.Response) -> ApiError:
+func _to_api_error(resp: C3Http.Response) -> ApiError:
 	var err := resp.error
 	match err.kind:
-		C3HTTPRequest.RequestError.Kind.HTTP:
+		C3Http.RequestError.Kind.HTTP:
 			return ApiError.from_response(resp.status, resp.body)
-		C3HTTPRequest.RequestError.Kind.CLIENT:
+		C3Http.RequestError.Kind.CLIENT:
 			return ApiError.client_error(err.message)
-		C3HTTPRequest.RequestError.Kind.CANCELLED:
+		C3Http.RequestError.Kind.CANCELLED:
 			return ApiError.cancelled(err.message)
 		_:
 			return ApiError.transport(err.message)
@@ -941,7 +941,7 @@ class ChatStream extends Node:
 	signal finished(result: ChatCompletionResponse)
 
 	var _client: C3OpenAIClient
-	var _token: C3HTTPRequest.CancellationToken
+	var _token: C3Http.CancellationToken
 	var _res := ChatCompletionResponse.new()
 	var _content := ""
 	var _refusal := ""
@@ -967,9 +967,9 @@ class ChatStream extends Node:
 		body: String
 	) -> void:
 		_client = client
-		_token = C3HTTPRequest.CancellationToken.new()
+		_token = C3Http.CancellationToken.new()
 		# Resolves when the stream closes; events arrive via _on_event meanwhile.
-		var resp: C3HTTPRequest.Response = await client._http_stream(
+		var resp: C3Http.Response = await client._http_stream(
 			url, headers, body, _on_event, _token
 		)
 		# cancel() may have already resolved while the request was in flight.
@@ -979,16 +979,16 @@ class ChatStream extends Node:
 			else:
 				var err := resp.error
 				match err.kind:
-					C3HTTPRequest.RequestError.Kind.HTTP:
+					C3Http.RequestError.Kind.HTTP:
 						# Parse the server's error body, mirroring chat_completion().
 						_resolve(
 							false,
 							ApiError.from_response(resp.status, resp.body),
 							true
 						)
-					C3HTTPRequest.RequestError.Kind.CANCELLED:
+					C3Http.RequestError.Kind.CANCELLED:
 						_resolve(false, ApiError.cancelled(err.message), false)
-					C3HTTPRequest.RequestError.Kind.CLIENT:
+					C3Http.RequestError.Kind.CLIENT:
 						_resolve(false, ApiError.client_error(err.message), true)
 					_:
 						_resolve(false, ApiError.transport(err.message), true)
@@ -997,7 +997,7 @@ class ChatStream extends Node:
 		# out from under the still-running request coroutine.
 		queue_free()
 
-	func _on_event(data: String, _event_type: String) -> void:
+	func _on_event(data: String, _event_type: String, _last_event_id: String) -> void:
 		if _done or data == "[DONE]":
 			return
 		var parser := JSON.new()

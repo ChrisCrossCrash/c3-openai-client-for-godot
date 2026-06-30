@@ -21,7 +21,7 @@ class TestSpeechOptions extends GutTest:
 
 ## Tests for [method C3OpenAIClient.create_speech].
 class TestCreateSpeech extends GutTest:
-	const C3HTTPRequest := preload("res://c3_openai_client/utils/c3_http_request.gd")
+	const C3Http := preload("res://c3_openai_client/utils/c3_http_request.gd")
 
 	var client: C3TestDoubles.TestableClient
 
@@ -30,7 +30,7 @@ class TestCreateSpeech extends GutTest:
 		add_child_autofree(client)
 
 	## A preset success response carrying minimal raw PCM bytes.
-	func ok_pcm() -> C3HTTPRequest.Response:
+	func ok_pcm() -> C3Http.Response:
 		return C3TestDoubles.ok_response(
 			PackedByteArray([0x00, 0x01, 0x02, 0x03])
 		)
