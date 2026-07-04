@@ -23,7 +23,8 @@
     "*.import",
     "*.svg",
     "assets/**",
-    "i18n/text.csv"
+    "i18n/text.csv",
+    "c3_openai_client/utils/c3_http_request.gd"
   ],
   "enableFiletypes": [
     "shellscript",
