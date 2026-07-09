@@ -715,6 +715,12 @@ class _Impl:
 			)
 			if conn_err != null:
 				return conn_err
+			if OS.has_feature("web"):
+				# HTTPClientWeb only advances once per frame. _connect_client's
+				# loop just polled to observe STATUS_CONNECTED and returned
+				# without a pump, so without this the loop below would poll again
+				# in the same frame and trigger a "polled multiple times" warning.
+				await _pump(tree, _on_worker)
 		last_status = HTTPClient.STATUS_CONNECTED
 
 		var err := _send_request(client, method, parsed, all_headers, request_data)
